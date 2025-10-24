@@ -20,6 +20,7 @@ redis_client = redis.StrictRedis(host=os.getenv("REDIS_HOST", 'localhost'),
 
 # TTL for OTP and pending user cache (seconds)
 OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
+FP_OTP_TTL_SECONDS = int(os.getenv("FP_OTP_TTL_SECONDS", "900"))  # default 15 minutes
 
 def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email).first()
@@ -103,3 +104,32 @@ def update_user_by_email(
     db.commit()
     db.refresh(user)
     return user
+
+
+# ===== Forgot Password (OTP) helpers =====
+
+def generate_reset_otp(email: str) -> str:
+    """Generate and store a password-reset OTP with TTL."""
+    otp = str(random.randint(100000, 999999))
+    redis_client.setex(f"fp:otp:{email}", FP_OTP_TTL_SECONDS, otp)
+    return otp
+
+
+def verify_reset_otp(email: str, otp: str) -> bool:
+    """Verify the provided reset OTP and set a short-lived verified flag."""
+    stored = redis_client.get(f"fp:otp:{email}")
+    if not stored or stored != otp:
+        return False
+    # consume OTP and set verified flag with a short TTL (10 minutes)
+    redis_client.delete(f"fp:otp:{email}")
+    redis_client.setex(f"fp:verified:{email}", 600, "1")
+    return True
+
+
+def can_reset_password(email: str) -> bool:
+    return redis_client.get(f"fp:verified:{email}") == "1"
+
+
+def clear_reset_state(email: str) -> None:
+    redis_client.delete(f"fp:otp:{email}")
+    redis_client.delete(f"fp:verified:{email}")
