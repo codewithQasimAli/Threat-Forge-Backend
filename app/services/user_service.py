@@ -69,3 +69,37 @@ def validate_otp(db: Session, email: str, otp: str) -> bool:
     redis_client.delete(f"otp:{email}")
     redis_client.delete(f"pending_user:{email}")
     return True
+
+
+def delete_user_by_email(db: Session, email: str) -> bool:
+    user = get_user_by_email(db, email)
+    if not user:
+        return False
+    db.delete(user)
+    db.commit()
+    return True
+
+
+def update_user_by_email(
+    db: Session,
+    email: str,
+    *,
+    name: Optional[str] = None,
+    password: Optional[str] = None,
+) -> Optional[User]:
+    user = get_user_by_email(db, email)
+    if not user:
+        return None
+    updated = False
+    if name is not None:
+        user.name = name
+        updated = True
+    if password is not None:
+        user.password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        updated = True
+    if not updated:
+        return user
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

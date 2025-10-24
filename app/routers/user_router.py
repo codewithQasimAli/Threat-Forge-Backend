@@ -6,6 +6,8 @@ from app.services.user_service import (
     generate_otp,
     validate_otp,
     cache_pending_user,
+    delete_user_by_email,
+    update_user_by_email,
 )
 from app.database import get_db
 from sqlalchemy.orm import Session
@@ -31,6 +33,10 @@ class UserSignin(BaseModel):
 class OTPVerify(BaseModel):
     email: str
     otp: str
+
+class UserUpdate(BaseModel):
+    name: str | None = None
+    password: str | None = None
 
 @router.post("/signup")
 def signup(user: UserSignup, db: Session = Depends(get_db)):
@@ -76,3 +82,20 @@ def verify_otp(payload: OTPVerify, db: Session = Depends(get_db)):
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
     return {"message": "OTP verified successfully"}
+
+
+@router.delete("/user/{email}")
+def delete_user(email: str, db: Session = Depends(get_db)):
+    deleted = delete_user_by_email(db, email)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User deleted"}
+
+
+@router.put("/user/{email}")
+def edit_user(email: str, payload: UserUpdate, db: Session = Depends(get_db)):
+    user = update_user_by_email(db, email, name=payload.name, password=payload.password)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User updated", "email": user.email, "name": user.name}
+
