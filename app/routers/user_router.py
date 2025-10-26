@@ -29,6 +29,8 @@ class UserSignup(BaseModel):
     name: str
     email: str
     password: str
+    phone: str | None = None
+    profile_picture: str | None = None
 
 class UserSignin(BaseModel):
     email: str
@@ -41,6 +43,8 @@ class OTPVerify(BaseModel):
 class UserUpdate(BaseModel):
     name: str | None = None
     password: str | None = None
+    phone: str | None = None
+    profile_picture: str | None = None
 
 class ForgotPasswordRequest(BaseModel):
     email: str
@@ -59,7 +63,13 @@ def signup(user: UserSignup, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     # Cache pending user (hashed password) and send OTP
-    cache_pending_user(user.name, user.email, user.password)
+    cache_pending_user(
+        user.name,
+        user.email,
+        user.password,
+        phone=user.phone,
+        profile_picture=user.profile_picture,
+    )
     otp = generate_otp(user.email)
     try:
         send_email(
@@ -109,10 +119,23 @@ def delete_user(email: str, db: Session = Depends(get_db)):
 
 @router.put("/user/{email}")
 def edit_user(email: str, payload: UserUpdate, db: Session = Depends(get_db)):
-    user = update_user_by_email(db, email, name=payload.name, password=payload.password)
+    user = update_user_by_email(
+        db,
+        email,
+        name=payload.name,
+        password=payload.password,
+        phone=payload.phone,
+        profile_picture=payload.profile_picture,
+    )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "User updated", "email": user.email, "name": user.name}
+    return {
+        "message": "User updated",
+        "email": user.email,
+        "name": user.name,
+        "phone": user.phone,
+        "profile_picture": user.profile_picture,
+    }
 
 
 # ===== Forgot Password (OTP) =====

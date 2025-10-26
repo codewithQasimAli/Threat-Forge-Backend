@@ -10,5 +10,7 @@ class User(Base):
     name = Column(String, index=True)
     email = Column(String, unique=True, index=True)
     password = Column(String)
+    phone = Column(String, nullable=True)
+    profile_picture = Column(String, nullable=True)
     createdAt = Column(DateTime(timezone=True), server_default=func.now())
     lastlogin = Column(DateTime(timezone=True), nullable=True)
