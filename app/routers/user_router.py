@@ -21,6 +21,7 @@ from app.core.email import send_email
 import os
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 router = APIRouter()

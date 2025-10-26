@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from app.routers import user_router
+from app.routers.device_router import router as device_router
 from app.database import engine
 from app.models.user import Base
 
@@ -9,3 +10,8 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 app.include_router(user_router.router)
+app.include_router(device_router) 
+
+
+
+

@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
+ 
 
 class User(Base):
     __tablename__ = "users"
@@ -14,3 +15,8 @@ class User(Base):
     profile_picture = Column(String, nullable=True)
     createdAt = Column(DateTime(timezone=True), server_default=func.now())
     lastlogin = Column(DateTime(timezone=True), nullable=True)
+
+    def __init__(self, *args, **kwargs):
+        from app.models.device import Device  # Import inside the method to avoid circular import
+        self.devices = relationship("Device", back_populates="user")
+        super().__init__(*args, **kwargs)
