@@ -98,7 +98,16 @@ def signin(user: UserSignin, db: Session = Depends(get_db)):
         db.commit()
     except Exception:
         db.rollback()
-    return {"access_token": access_token, "token_type": "bearer"}
+    user_payload = {
+        "id": db_user.id,
+        "name": db_user.name,
+        "email": db_user.email,
+        "phone": getattr(db_user, "phone", None),
+        "profile_picture": getattr(db_user, "profile_picture", None),
+        "createdAt": getattr(db_user, "createdAt", None),
+        "lastlogin": getattr(db_user, "lastlogin", None),
+    }
+    return {"access_token": access_token, "token_type": "bearer", "user": user_payload}
 
 
 @router.post("/verify-otp")
