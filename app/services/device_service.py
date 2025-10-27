@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 # Get Device by ID
-def get_device_by_id(db: Session, device_id: int) -> Optional[Device]:
-    return db.query(Device).filter(Device.id == device_id).first()
+def get_device_by_id(db: Session, id: int) -> Optional[Device]:
+    return db.query(Device).filter(Device.id == id).first()
 
 # Get All Devices (with pagination)
 def get_devices(db: Session, skip: int = 0, limit: int = 100):
@@ -37,7 +37,7 @@ def create_device(
 # Update Device by ID
 def update_device_by_id(
     db: Session,
-    device_id: int,
+    id: int,
     device_name: Optional[str] = None,
     device_type: Optional[str] = None,
     ip_address: Optional[str] = None,
@@ -45,7 +45,7 @@ def update_device_by_id(
     status: Optional[str] = None,
     user_id: Optional[int] = None  # Optional user_id to allow changing user association
 ) -> Optional[Device]:
-    db_device = get_device_by_id(db, device_id)
+    db_device = get_device_by_id(db, id)
     if not db_device:
         return None
 
@@ -68,8 +68,8 @@ def update_device_by_id(
     return db_device
 
 # Delete Device by ID
-def delete_device_by_id(db: Session, device_id: int) -> bool:
-    db_device = get_device_by_id(db, device_id)
+def delete_device_by_id(db: Session, id: int) -> bool:
+    db_device = get_device_by_id(db, id)
     if db_device:
         db.delete(db_device)
         db.commit()

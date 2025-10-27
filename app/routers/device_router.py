@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from app.models.device import Device  # Ensure you import the Device model
 
 router = APIRouter()
 
@@ -59,9 +60,9 @@ def create_device_route(device: DeviceCreate, db: Session = Depends(get_db)):
 
 
 # Get Device by ID
-@router.get("/devices/{device_id}", response_model=DeviceResponse)
-def get_device_route(device_id: int, db: Session = Depends(get_db)):
-    db_device = get_device_by_id(db=db, device_id=device_id)
+@router.get("/devices/{id}", response_model=DeviceResponse)
+def get_device_route(id: int, db: Session = Depends(get_db)):
+    db_device = get_device_by_id(db=db, id=id)
     if db_device is None:
         raise HTTPException(status_code=404, detail="Device not found")
     
@@ -87,18 +88,35 @@ def get_devices_route(skip: int = 0, limit: int = 100, db: Session = Depends(get
 
 
 # Update Device by ID
-@router.put("/devices/{device_id}", response_model=DeviceResponse)
-def update_device_route(device_id: int, device: DeviceUpdate, db: Session = Depends(get_db)):
-    db_device = update_device_by_id(db=db, device_id=device_id, **device.dict(exclude_unset=True))
+@router.put("/devices/{id}", response_model=DeviceResponse)
+def update_device_route(id: int, device: DeviceUpdate, db: Session = Depends(get_db)):
+    db_device = update_device_by_id(db=db, id=id, **device.dict(exclude_unset=True))
     if db_device is None:
         raise HTTPException(status_code=404, detail="Device not found")
     return db_device
 
 
 # Delete Device by ID
-@router.delete("/devices/{device_id}", response_model=DeviceResponse)
-def delete_device_route(device_id: int, db: Session = Depends(get_db)):
-    db_device = delete_device_by_id(db=db, device_id=device_id)
-    if not db_device:
+@router.delete("/devices/{id}", response_model=DeviceResponse)
+def delete_device_route(id: int, db: Session = Depends(get_db)):
+    # Fetch the device by ID
+    db_device = db.query(Device).filter(Device.id == id).first()
+
+    if db_device is None:
         raise HTTPException(status_code=404, detail="Device not found")
-    return {"message": "Device deleted successfully"}
+
+    # Delete the device from the database
+    db.delete(db_device)
+    db.commit()
+
+    # Return the deleted device details
+    return {
+        "id": db_device.id,
+        "user_id": db_device.user_id,
+        "device_name": db_device.device_name,
+        "device_type": db_device.device_type,
+        "ip_address": db_device.ip_address,
+        "mac_address": db_device.mac_address,
+        "status": db_device.status,
+        "created_at": db_device.created_at
+    }

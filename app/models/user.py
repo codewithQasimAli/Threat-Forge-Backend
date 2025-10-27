@@ -20,3 +20,5 @@ class User(Base):
         from app.models.device import Device  # Import inside the method to avoid circular import
         self.devices = relationship("Device", back_populates="user")
         super().__init__(*args, **kwargs)
+
+    alerts = relationship("Alert", back_populates="user")
