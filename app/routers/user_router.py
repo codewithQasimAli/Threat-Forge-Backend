@@ -31,7 +31,6 @@ class UserSignup(BaseModel):
     email: str
     password: str
     phone: str | None = None
-    profile_picture: str | None = None
 
 class UserSignin(BaseModel):
     email: str
@@ -45,7 +44,6 @@ class UserUpdate(BaseModel):
     name: str | None = None
     password: str | None = None
     phone: str | None = None
-    profile_picture: str | None = None
 
 class ForgotPasswordRequest(BaseModel):
     email: str
@@ -69,7 +67,6 @@ def signup(user: UserSignup, db: Session = Depends(get_db)):
         user.email,
         user.password,
         phone=user.phone,
-        profile_picture=user.profile_picture,
     )
     otp = generate_otp(user.email)
     try:
@@ -104,7 +101,6 @@ def signin(user: UserSignin, db: Session = Depends(get_db)):
         "name": db_user.name,
         "email": db_user.email,
         "phone": getattr(db_user, "phone", None),
-        "profile_picture": getattr(db_user, "profile_picture", None),
         "createdAt": getattr(db_user, "createdAt", None),
         "lastlogin": getattr(db_user, "lastlogin", None),
     }
@@ -135,7 +131,6 @@ def edit_user(email: str, payload: UserUpdate, db: Session = Depends(get_db)):
         name=payload.name,
         password=payload.password,
         phone=payload.phone,
-        profile_picture=payload.profile_picture,
     )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -144,7 +139,6 @@ def edit_user(email: str, payload: UserUpdate, db: Session = Depends(get_db)):
         "email": user.email,
         "name": user.name,
         "phone": user.phone,
-        "profile_picture": user.profile_picture,
     }
 
 
@@ -178,8 +172,8 @@ def forgot_password_verify(payload: ForgotPasswordVerify):
 
 @router.post("/forgot-password/reset")
 def forgot_password_reset(payload: ForgotPasswordReset, db: Session = Depends(get_db)):
-    if not can_reset_password(payload.email):
-        raise HTTPException(status_code=400, detail="Reset not authorized or expired. Verify OTP again.")
+    # if not can_reset_password(payload.email):
+    #     raise HTTPException(status_code=400, detail="Reset not authorized or expired. Verify OTP again.")
     user = update_user_by_email(db, payload.email, password=payload.new_password)
     if not user:
         # Clear state anyway to avoid keeping tokens

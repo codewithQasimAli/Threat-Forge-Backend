@@ -11,6 +11,16 @@ def get_device_by_id(db: Session, id: int) -> Optional[Device]:
 def get_devices(db: Session, skip: int = 0, limit: int = 100):
     return db.query(Device).offset(skip).limit(limit).all()
 
+# Get all devices for a specific user
+def get_devices_by_user_id(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+    return (
+        db.query(Device)
+        .filter(Device.user_id == user_id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
 # Create Device
 def create_device(
     db: Session,

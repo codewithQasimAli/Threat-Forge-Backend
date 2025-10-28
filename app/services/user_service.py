@@ -33,7 +33,6 @@ def create_user(
     *,
     hashed_password: Optional[str] = None,
     phone: Optional[str] = None,
-    profile_picture: Optional[str] = None,
 ):
     if hashed_password is None:
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -42,7 +41,6 @@ def create_user(
         email=email,
         password=hashed_password,
         phone=phone,
-        profile_picture=profile_picture,
     )
     db.add(db_user)
     db.commit()
@@ -58,14 +56,13 @@ def generate_otp(email: str) -> str:
     return otp
 
 
-def cache_pending_user(name: str, email: str, password: str, *, phone: Optional[str] = None, profile_picture: Optional[str] = None) -> None:
+def cache_pending_user(name: str, email: str, password: str, *, phone: Optional[str] = None) -> None:
     hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     data = {
         "name": name,
         "email": email,
         "password": hashed,
         "phone": phone,
-        "profile_picture": profile_picture,
     }
     redis_client.setex(f"pending_user:{email}", OTP_TTL_SECONDS, json.dumps(data))
 
@@ -90,7 +87,6 @@ def validate_otp(db: Session, email: str, otp: str) -> bool:
         password="",
         hashed_password=payload["password"],
         phone=payload.get("phone"),
-        profile_picture=payload.get("profile_picture"),
     )
     # cleanup keys
     redis_client.delete(f"otp:{email}")
@@ -114,7 +110,6 @@ def update_user_by_email(
     name: Optional[str] = None,
     password: Optional[str] = None,
     phone: Optional[str] = None,
-    profile_picture: Optional[str] = None,
 ) -> Optional[User]:
     user = get_user_by_email(db, email)
     if not user:
@@ -128,9 +123,6 @@ def update_user_by_email(
         updated = True
     if phone is not None:
         user.phone = phone
-        updated = True
-    if profile_picture is not None:
-        user.profile_picture = profile_picture
         updated = True
     if not updated:
         return user
