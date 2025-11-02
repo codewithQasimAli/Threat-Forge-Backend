@@ -24,7 +24,8 @@ def create_alert(
     title: str,
     message: str,
     severity: str,
-    status: str = "active"
+    status: str = "active",
+    acknowledged: bool = False,
 ):
     db_alert = Alert(
         user_id=user_id,
@@ -32,7 +33,8 @@ def create_alert(
         title=title,
         message=message,
         severity=severity,
-        status=status
+        status=status,
+        acknowledged=acknowledged,
     )
     db.add(db_alert)
     db.commit()
@@ -46,7 +48,8 @@ def update_alert_by_id(
     title: Optional[str] = None,
     message: Optional[str] = None,
     severity: Optional[str] = None,
-    status: Optional[str] = None
+    status: Optional[str] = None,
+    acknowledged: Optional[bool] = None,
 ):
     db_alert = db.query(Alert).filter(Alert.id == id).first()
     if not db_alert:
@@ -60,6 +63,8 @@ def update_alert_by_id(
         db_alert.severity = severity
     if status:
         db_alert.status = status
+    if acknowledged is not None:
+        db_alert.acknowledged = acknowledged
 
     db.commit()
     db.refresh(db_alert)

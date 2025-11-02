@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from app.database import Base
 from datetime import datetime
@@ -19,6 +19,7 @@ class Alert(Base):
     message = Column(String)
     severity = Column(String)
     status = Column(Enum(AlertStatus, name="alert_status_enum"), default=AlertStatus.active)  # Added name to Enum
+    acknowledged = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships

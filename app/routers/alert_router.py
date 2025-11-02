@@ -25,12 +25,14 @@ class AlertCreate(BaseModel):
     message: str
     severity: str
     status: Optional[str] = "active"
+    acknowledged: Optional[bool] = False
 
 class AlertUpdate(BaseModel):
     title: Optional[str] = None
     message: Optional[str] = None
     severity: Optional[str] = None
     status: Optional[str] = None
+    acknowledged: Optional[bool] = None
 
 class AlertResponse(BaseModel):
     id: int
@@ -40,6 +42,7 @@ class AlertResponse(BaseModel):
     message: str
     severity: str
     status: str
+    acknowledged: bool
     created_at: datetime
 
     class Config:
@@ -56,7 +59,8 @@ def create_alert_route(alert: AlertCreate, db: Session = Depends(get_db)):
         title=alert.title,
         message=alert.message,
         severity=alert.severity,
-        status=alert.status
+        status=alert.status,
+        acknowledged=alert.acknowledged if alert.acknowledged is not None else False,
     )
     return db_alert
 
@@ -113,6 +117,7 @@ def delete_alert_route(id: int, db: Session = Depends(get_db)):
         "message": db_alert.message,
         "severity": db_alert.severity,
         "status": db_alert.status,
+        "acknowledged": db_alert.acknowledged,
         "created_at": db_alert.created_at
     }
 
