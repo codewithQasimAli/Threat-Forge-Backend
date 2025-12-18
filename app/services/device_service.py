@@ -1,17 +1,14 @@
-from app.models.device import Device
-from app.database import SessionLocal
 from sqlalchemy.orm import Session
+from app.models.device import Device
 from typing import Optional
+from sqlalchemy.exc import SQLAlchemyError
 
-# Get Device by ID
 def get_device_by_id(db: Session, id: int) -> Optional[Device]:
     return db.query(Device).filter(Device.id == id).first()
 
-# Get All Devices (with pagination)
 def get_devices(db: Session, skip: int = 0, limit: int = 100):
     return db.query(Device).offset(skip).limit(limit).all()
 
-# Get all devices for a specific user
 def get_devices_by_user_id(db: Session, user_id: int, skip: int = 0, limit: int = 100):
     return (
         db.query(Device)
@@ -21,7 +18,6 @@ def get_devices_by_user_id(db: Session, user_id: int, skip: int = 0, limit: int 
         .all()
     )
 
-# Create Device
 def create_device(
     db: Session,
     device_name: str,
@@ -29,7 +25,7 @@ def create_device(
     ip_address: str,
     mac_address: str,
     status: str,
-    user_id: int  # New user_id argument to associate the device with a user
+    user_id: int  
 ) -> Device:
     db_device = Device(
         device_name=device_name,
@@ -37,14 +33,13 @@ def create_device(
         ip_address=ip_address,
         mac_address=mac_address,
         status=status,
-        user_id=user_id  # Associate the device with the user
+        user_id=user_id  
     )
     db.add(db_device)
     db.commit()
     db.refresh(db_device)
     return db_device
 
-# Update Device by ID
 def update_device_by_id(
     db: Session,
     id: int,
@@ -53,13 +48,12 @@ def update_device_by_id(
     ip_address: Optional[str] = None,
     mac_address: Optional[str] = None,
     status: Optional[str] = None,
-    user_id: Optional[int] = None  # Optional user_id to allow changing user association
+    user_id: Optional[int] = None  
 ) -> Optional[Device]:
     db_device = get_device_by_id(db, id)
     if not db_device:
         return None
 
-    # Update only the fields that are provided
     if device_name:
         db_device.device_name = device_name
     if device_type:
@@ -70,18 +64,23 @@ def update_device_by_id(
         db_device.mac_address = mac_address
     if status:
         db_device.status = status
-    if user_id is not None:  # Only update user_id if provided
+    if user_id is not None:  
         db_device.user_id = user_id
 
     db.commit()
     db.refresh(db_device)
     return db_device
 
-# Delete Device by ID
 def delete_device_by_id(db: Session, id: int) -> bool:
-    db_device = get_device_by_id(db, id)
-    if db_device:
-        db.delete(db_device)
+    try:
+        db_device = get_device_by_id(db, id)
+        if not db_device:
+            return False
+        
+        db.delete(db_device)  
         db.commit()
         return True
-    return False
+    except SQLAlchemyError as e:
+        db.rollback()
+        print(f"Error deleting device: {e}")
+        return False

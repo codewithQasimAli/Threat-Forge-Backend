@@ -1,27 +1,32 @@
-from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
-from datetime import datetime
-from enum import Enum as PyEnum  # Import Enum from Python's enum module
-
-# Define the status Enum with a name
-class AlertStatus(PyEnum):
-    active = "active"
-    inactive = "inactive"
 
 class Alert(Base):
     __tablename__ = "alerts"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    device_id = Column(Integer, ForeignKey("devices.id"))
-    title = Column(String)
-    message = Column(String)
-    severity = Column(String)
-    status = Column(Enum(AlertStatus, name="alert_status_enum"), default=AlertStatus.active)  # Added name to Enum
-    acknowledged = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)
+    
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    severity = Column(String(50), nullable=False)
+    status = Column(String(50), default="active")
+    acknowledged = Column(Boolean, default=False)
+    
+    source_ip = Column(String(45), nullable=True)
+    dest_ip = Column(String(45), nullable=True)
+    rmse_score = Column(Float, nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    
+    details = Column(Text, nullable=True)
+    
     user = relationship("User", back_populates="alerts")
     device = relationship("Device", back_populates="alerts")
+    
+    def __repr__(self):
+        return f"<Alert(id={self.id}, title='{self.title}', severity='{self.severity}', acknowledged={self.acknowledged})>"

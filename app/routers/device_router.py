@@ -110,22 +110,11 @@ def update_device_route(id: int, device: DeviceUpdate, db: Session = Depends(get
 # Delete Device by ID
 @router.delete("/device/{id}", response_model=DeleteMessage)
 def delete_device_route(id: int, db: Session = Depends(get_db)):
-    db_device = delete_device_by_id(db=db, id=id)
-    if not db_device:
+    # delete_device_by_id already handles the deletion and returns True/False
+    success = delete_device_by_id(db=db, id=id)
+    
+    if not success:
         raise HTTPException(status_code=404, detail="Device not found")
-
-    # Delete the device from the database
-    db.delete(db_device)
-    db.commit()
-
-    # Return the deleted device details
-    return {
-        "id": db_device.id,
-        "user_id": db_device.user_id,
-        "device_name": db_device.device_name,
-        "device_type": db_device.device_type,
-        "ip_address": db_device.ip_address,
-        "mac_address": db_device.mac_address,
-        "status": db_device.status,
-        "created_at": db_device.created_at
-    }
+    
+    return {"message": "Device deleted successfully"}
+    

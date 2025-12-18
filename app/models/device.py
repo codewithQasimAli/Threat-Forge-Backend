@@ -5,7 +5,6 @@ from datetime import datetime
 from app.database import Base
 from sqlalchemy.sql import func
 
-# Define an Enum for DeviceStatus (You should replace this with actual status values)
 class DeviceStatus(PyEnum):
     active = "active"
     inactive = "inactive"
@@ -15,18 +14,17 @@ class Device(Base):
     __tablename__ = "devices"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))  # Foreign key linking to the User table
+    user_id = Column(Integer, ForeignKey("users.id"))  
     device_name = Column(String)
     device_type = Column(String)
     ip_address = Column(String)
     mac_address = Column(String)
-    status = Column(Enum(DeviceStatus), default=DeviceStatus.inactive)  # Enum column for status
+    status = Column(Enum(DeviceStatus), default=DeviceStatus.inactive) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
 
-    # Establishing the relationship to User model
     def __init__(self, *args, **kwargs):
-        from app.models.user import User  # Import inside the method to avoid circular import
+        from app.models.user import User  
         self.user = relationship("User", back_populates="devices")
         super().__init__(*args, **kwargs)
 

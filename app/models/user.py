@@ -16,7 +16,7 @@ class User(Base):
     lastlogin = Column(DateTime(timezone=True), nullable=True)
 
     def __init__(self, *args, **kwargs):
-        from app.models.device import Device  # Import inside the method to avoid circular import
+        from app.models.device import Device  
         self.devices = relationship("Device", back_populates="user")
         super().__init__(*args, **kwargs)
 

@@ -13,7 +13,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-# FastAPI dependency to provide a scoped DB session per request
 def get_db():
     db = SessionLocal()
     try:

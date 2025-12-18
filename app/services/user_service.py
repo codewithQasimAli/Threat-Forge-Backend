@@ -71,7 +71,7 @@ def validate_otp(db: Session, email: str, otp: str) -> bool:
     stored = redis_client.get(f"otp:{email}")
     if not stored or stored != otp:
         return False
-    # fetch pending user payload
+   
     raw = redis_client.get(f"pending_user:{email}")
     if not raw:
         return False
@@ -79,7 +79,7 @@ def validate_otp(db: Session, email: str, otp: str) -> bool:
         payload = json.loads(raw)
     except Exception:
         return False
-    # create user in DB with hashed password from cache
+   
     create_user(
         db,
         payload["name"],
@@ -132,8 +132,6 @@ def update_user_by_email(
     return user
 
 
-# ===== Forgot Password (OTP) helpers =====
-
 def generate_reset_otp(email: str) -> str:
     """Generate and store a password-reset OTP with TTL."""
     otp = str(random.randint(100000, 999999))
@@ -146,7 +144,7 @@ def verify_reset_otp(email: str, otp: str) -> bool:
     stored = redis_client.get(f"fp:otp:{email}")
     if not stored or stored != otp:
         return False
-    # consume OTP and set verified flag with a short TTL (10 minutes)
+    
     redis_client.delete(f"fp:otp:{email}")
     redis_client.setex(f"fp:verified:{email}", 600, "1")
     return True
