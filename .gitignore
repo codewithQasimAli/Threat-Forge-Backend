@@ -5,3 +5,4 @@ venv/
 # Bytecode cache
 __pycache__/
 
+services/Kitsune-py/
