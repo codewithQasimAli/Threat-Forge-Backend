@@ -75,14 +75,20 @@ class KitsuneIDSService:
         
         self.kitnet = None
         self.packet_count = 0
-        self.anomaly_threshold = 0.1
+        
+        # FIXED: Much lower threshold + adaptive calculation
+        self.anomaly_threshold = 0.01  # Lower initial threshold
+        self.rmse_scores = []  # Track RMSE scores during training
+        self.training_rmse_max = 0  # Maximum RMSE seen during training
+        self.training_rmse_min = float('inf')  # Minimum RMSE seen during training
         
         # Statistics
         self.stats = {
             'total_packets': 0,
             'anomalies_detected': 0,
             'false_positives': 0,
-            'training_complete': False
+            'training_complete': False,
+            'last_rmse_score': 0  # ADDED: Track last RMSE
         }
         
     def extract_features(self, packet_data):
@@ -169,11 +175,15 @@ class KitsuneIDSService:
         
         # Initialize KitNET on first successful feature extraction
         if self.kitnet is None:
-            print(f"\n[Initializing KitNET]")
+            print(f"\n{'='*60}")
+            print(f"[Initializing KitNET]")
+            print(f"{'='*60}")
             print(f"  Number of features: {len(features)}")
             print(f"  Max autoencoder size: {self.max_autoencoder_size}")
             print(f"  FM grace period: {self.fm_grace_period}")
             print(f"  AD grace period: {self.ad_grace_period}")
+            print(f"  Initial threshold: {self.anomaly_threshold}")
+            print(f"{'='*60}\n")
             
             try:
                 self.kitnet = KitNET(
@@ -182,7 +192,7 @@ class KitsuneIDSService:
                     self.fm_grace_period,
                     self.ad_grace_period
                 )
-                print("✓ KitNET initialized successfully")
+                print("✓ KitNET initialized successfully\n")
             except Exception as e:
                 print(f"✗ Failed to initialize KitNET: {e}")
                 import traceback
@@ -198,6 +208,47 @@ class KitsuneIDSService:
         try:
             rmse = self.kitnet.process(features)
             
+            # ADDED: Track RMSE score
+            if rmse is not None:
+                self.stats['last_rmse_score'] = float(rmse)
+                
+                # During training, collect RMSE scores to calculate adaptive threshold
+                if self.packet_count <= self.ad_grace_period:
+                    self.rmse_scores.append(float(rmse))
+                    if float(rmse) > self.training_rmse_max:
+                        self.training_rmse_max = float(rmse)
+                    if float(rmse) < self.training_rmse_min:
+                        self.training_rmse_min = float(rmse)
+                
+                # FIXED: Calculate adaptive threshold after training
+                if self.packet_count == self.ad_grace_period + 1:
+                    if len(self.rmse_scores) > 0:
+                        # Set threshold as: mean + 3 * std deviation
+                        rmse_mean = np.mean(self.rmse_scores)
+                        rmse_std = np.std(self.rmse_scores)
+                        rmse_median = np.median(self.rmse_scores)
+                        
+                        # Use mean + 3*std, but ensure it's reasonable
+                        self.anomaly_threshold = rmse_mean + (3 * rmse_std)
+                        
+                        # Safety check: if threshold is too low, use a reasonable minimum
+                        if self.anomaly_threshold < 0.0001:
+                            self.anomaly_threshold = 0.001
+                        
+                        print(f"\n{'='*60}")
+                        print(f"[TRAINING COMPLETE - ADAPTIVE THRESHOLD SET]")
+                        print(f"{'='*60}")
+                        print(f"  Training packets: {len(self.rmse_scores)}")
+                        print(f"  RMSE Statistics:")
+                        print(f"    Mean:   {rmse_mean:.8f}")
+                        print(f"    Median: {rmse_median:.8f}")
+                        print(f"    Std:    {rmse_std:.8f}")
+                        print(f"    Min:    {self.training_rmse_min:.8f}")
+                        print(f"    Max:    {self.training_rmse_max:.8f}")
+                        print(f"  New threshold: {self.anomaly_threshold:.8f}")
+                        print(f"  (Threshold = Mean + 3*Std)")
+                        print(f"{'='*60}\n")
+            
             # Determine if anomaly
             is_anomaly = False
             if rmse is not None and rmse > self.anomaly_threshold:
@@ -205,10 +256,26 @@ class KitsuneIDSService:
                 if self.packet_count > self.ad_grace_period:
                     is_anomaly = True
                     self.stats['anomalies_detected'] += 1
+                    
+                    # ADDED: Debug output for detected anomalies
+                    print(f"\n🚨 ANOMALY DETECTED!")
+                    print(f"  Packet #{self.packet_count}")
+                    print(f"  RMSE: {rmse:.8f}")
+                    print(f"  Threshold: {self.anomaly_threshold:.8f}")
+                    print(f"  Excess: {(rmse - self.anomaly_threshold):.8f} ({((rmse/self.anomaly_threshold - 1)*100):.1f}% above threshold)")
+                    print(f"  Source: {packet_data.get('source_ip')}:{packet_data.get('source_port')} → {packet_data.get('dest_ip')}:{packet_data.get('dest_port')}")
+                    print(f"  Length: {packet_data.get('length')} bytes\n")
             
             # Update training status
             if self.packet_count > self.ad_grace_period:
                 self.stats['training_complete'] = True
+            
+            # Show progress during training
+            if self.packet_count <= self.ad_grace_period:
+                if self.packet_count % 1000 == 0:
+                    phase = self._get_training_phase()
+                    progress = self._get_progress_percentage()
+                    print(f"[Training Progress] Packet {self.packet_count}/{self.ad_grace_period} ({progress:.1f}%) | Phase: {phase} | Last RMSE: {rmse:.8f}")
             
             return {
                 'success': True,
@@ -263,16 +330,23 @@ class KitsuneIDSService:
         
         # Determine severity based on RMSE score
         rmse = detection_result.get('rmse', 0)
-        if rmse > self.anomaly_threshold * 3:
+        threshold = self.anomaly_threshold
+        
+        # Calculate how many times above threshold
+        excess_factor = rmse / threshold if threshold > 0 else 1
+        
+        if excess_factor > 5:
             severity = 'critical'
-        elif rmse > self.anomaly_threshold * 2:
+        elif excess_factor > 3:
             severity = 'high'
-        else:
+        elif excess_factor > 2:
             severity = 'medium'
+        else:
+            severity = 'low'
         
         alert = {
-            'title': f"Anomaly Detected: {detection_result.get('source_ip', 'unknown')} → {detection_result.get('dest_ip', 'unknown')}",
-            'description': f"Network anomaly detected with RMSE score of {rmse:.4f} (threshold: {self.anomaly_threshold})",
+            'title': f"Network Anomaly: {detection_result.get('source_ip', 'unknown')} → {detection_result.get('dest_ip', 'unknown')}",
+            'description': f"Unusual network behavior detected with RMSE score of {rmse:.6f} (threshold: {threshold:.6f}, {((excess_factor-1)*100):.1f}% above normal)",
             'severity': severity,
             'source_ip': detection_result.get('source_ip'),
             'dest_ip': detection_result.get('dest_ip'),
@@ -281,7 +355,8 @@ class KitsuneIDSService:
             'acknowledged': False,
             'details': {
                 'packet_count': detection_result.get('packet_count'),
-                'threshold': detection_result.get('threshold'),
+                'threshold': threshold,
+                'excess_factor': excess_factor,
                 'detection_time': detection_result.get('timestamp'),
                 'training_phase': detection_result.get('training_phase')
             }
@@ -299,7 +374,11 @@ class KitsuneIDSService:
             'progress_percentage': self._get_progress_percentage(),
             'fm_grace_period': self.fm_grace_period,
             'ad_grace_period': self.ad_grace_period,
-            'anomaly_threshold': self.anomaly_threshold
+            'anomaly_threshold': self.anomaly_threshold,
+            'last_rmse_score': self.stats['last_rmse_score'],
+            'training_rmse_max': self.training_rmse_max,
+            'training_rmse_min': self.training_rmse_min if self.training_rmse_min != float('inf') else 0,
+            'rmse_samples_collected': len(self.rmse_scores)
         }
 
 
@@ -377,7 +456,7 @@ def test_kitsune_service():
                 print(f"    Source: {packet['source_ip']}:{packet['source_port']}")
                 print(f"    Dest: {packet['dest_ip']}:{packet['dest_port']}")
                 print(f"    RMSE: {result['rmse']:.6f}")
-                print(f"    Anomaly: {'YES ' if result['anomaly_detected'] else 'NO ✓'}")
+                print(f"    Anomaly: {'YES 🚨' if result['anomaly_detected'] else 'NO ✓'}")
                 print(f"    Phase: {result.get('training_phase', 'unknown')}")
                 print(f"    Progress: {result.get('progress_percentage', 0):.1f}%")
                 
@@ -402,6 +481,8 @@ def test_kitsune_service():
     print(f"  Training complete: {stats['training_complete']}")
     print(f"  Current phase: {stats['training_phase']}")
     print(f"  Progress: {stats['progress_percentage']:.1f}%")
+    print(f"  Last RMSE: {stats['last_rmse_score']:.6f}")
+    print(f"  Threshold: {stats['anomaly_threshold']:.6f}")
     
     print("\n" + "="*60)
     print("TEST COMPLETED SUCCESSFULLY ✓")

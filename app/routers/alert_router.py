@@ -19,6 +19,11 @@ class AlertCreate(BaseModel):
     status: Optional[str] = "active"
     acknowledged: Optional[bool] = False
 
+    source_ip: Optional[str] = None
+    dest_ip: Optional[str] = None
+    rmse_score: Optional[float] = None
+    details: Optional[str] = None
+
 
 class AlertUpdate(BaseModel):
     title: Optional[str] = None
@@ -58,7 +63,10 @@ class PacketData(BaseModel):
     protocol: str = "TCP"
     length: int = 0
 
+
+# Global singleton instance
 _alert_service_instance = None
+
 
 def get_alert_service(db: Session = Depends(get_db)) -> AlertService:
     """
@@ -76,32 +84,42 @@ def get_alert_service(db: Session = Depends(get_db)) -> AlertService:
     return _alert_service_instance
 
 
+# ============================================================================
+# KITSUNE IDS ENDPOINTS
+# ============================================================================
+
 @router.post("/kitsune/initialize")
 def initialize_kitsune(alert_service: AlertService = Depends(get_alert_service)):
     """Initialize the Kitsune IDS system"""
     success = alert_service.initialize_kitsune()
     if success:
+        stats = alert_service.get_kitsune_statistics()
         return {
             "status": "initialized",
-            "message": "Kitsune IDS initialized successfully"
+            "message": "Kitsune IDS initialized successfully",
+            "config": {
+                "fm_grace_period": stats['fm_grace_period'],
+                "ad_grace_period": stats['ad_grace_period'],
+                "initial_threshold": stats['anomaly_threshold']
+            }
         }
     else:
         raise HTTPException(
             status_code=500,
-            detail="Failed to initialize Kitsune IDS"
+            detail="Failed to initialize Kitsune IDS. Check server logs."
         )
 
 
 @router.get("/kitsune/statistics")
 def get_kitsune_statistics(alert_service: AlertService = Depends(get_alert_service)):
-    """Get Kitsune IDS statistics"""
+    """Get Kitsune IDS statistics and training status"""
     stats = alert_service.get_kitsune_statistics()
     if stats is not None:
         return stats
     else:
         raise HTTPException(
             status_code=503,
-            detail="Kitsune IDS not initialized"
+            detail="Kitsune IDS not initialized. Call /kitsune/initialize first."
         )
 
 
@@ -110,8 +128,12 @@ def process_network_packet(
     packet: PacketData,
     alert_service: AlertService = Depends(get_alert_service)
 ):
-    """Process a network packet through Kitsune IDS"""
+    """
+    Process a network packet through Kitsune IDS
+    Returns detection result and creates alert if anomaly detected
+    """
     try:
+        # Convert packet to dict
         packet_dict = {
             'timestamp': packet.timestamp,
             'source_ip': packet.source_ip,
@@ -122,13 +144,18 @@ def process_network_packet(
             'length': packet.length
         }
         
+        # Process through Kitsune
         alert = alert_service.process_network_packet(
             packet_dict,
             packet.user_id,
             packet.device_id
         )
         
+        # Get current statistics
+        stats = alert_service.get_kitsune_statistics()
+        
         if alert:
+            # Anomaly detected and alert created
             return {
                 "status": "processed",
                 "anomaly_detected": True,
@@ -140,31 +167,48 @@ def process_network_packet(
                     "source_ip": alert.source_ip,
                     "dest_ip": alert.dest_ip,
                     "rmse_score": alert.rmse_score
+                },
+                "kitsune_stats": {
+                    "packet_count": stats['total_packets'],
+                    "training_phase": stats['training_phase'],
+                    "threshold": stats['anomaly_threshold'],
+                    "last_rmse": stats['last_rmse_score']
                 }
             }
         else:
-            # Get the last RMSE score if available
-            stats = alert_service.get_kitsune_statistics()
-            rmse = stats.get('last_rmse_score', 0) if stats else 0
-            
+            # Normal packet or training phase
             return {
                 "status": "processed",
                 "anomaly_detected": False,
                 "alert_created": False,
-                "rmse_score": rmse
+                "kitsune_stats": {
+                    "packet_count": stats['total_packets'],
+                    "training_phase": stats['training_phase'],
+                    "progress": stats['progress_percentage'],
+                    "threshold": stats['anomaly_threshold'],
+                    "last_rmse": stats['last_rmse_score']
+                }
             }
+            
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500, 
             detail=f"Error processing packet: {str(e)}"
         )
 
 
+# ============================================================================
+# ALERT CRUD ENDPOINTS
+# ============================================================================
+
 @router.get("/alerts", response_model=list[AlertResponse])
 def get_alerts_route(
     skip: int = 0, 
     limit: int = 100,
     acknowledged: Optional[bool] = None,
+    severity: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Get all alerts with optional filtering"""
@@ -173,7 +217,10 @@ def get_alerts_route(
     if acknowledged is not None:
         query = query.filter(Alert.acknowledged == acknowledged)
     
-    alerts = query.offset(skip).limit(limit).all()
+    if severity:
+        query = query.filter(Alert.severity == severity)
+    
+    alerts = query.order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
     return alerts
 
 
@@ -183,6 +230,7 @@ def get_alerts_by_user_route(
     skip: int = 0,
     limit: int = 100,
     acknowledged: Optional[bool] = None,
+    severity: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Get alerts for a specific user with optional filtering"""
@@ -191,7 +239,10 @@ def get_alerts_by_user_route(
     if acknowledged is not None:
         query = query.filter(Alert.acknowledged == acknowledged)
     
-    alerts = query.offset(skip).limit(limit).all()
+    if severity:
+        query = query.filter(Alert.severity == severity)
+    
+    alerts = query.order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
     return alerts
 
 
@@ -205,8 +256,47 @@ def get_alerts_by_device_route(
     """Get alerts for a specific device"""
     alerts = db.query(Alert).filter(
         Alert.device_id == device_id
-    ).offset(skip).limit(limit).all()
+    ).order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
     return alerts
+
+
+@router.get("/alerts/summary/user/{user_id}")
+def get_alerts_summary(user_id: int, db: Session = Depends(get_db)):
+    """Get summary statistics for user's alerts"""
+    total = db.query(Alert).filter(Alert.user_id == user_id).count()
+    unacknowledged = db.query(Alert).filter(
+        Alert.user_id == user_id,
+        Alert.acknowledged == False
+    ).count()
+    
+    # Count by severity
+    critical = db.query(Alert).filter(
+        Alert.user_id == user_id,
+        Alert.severity == 'critical'
+    ).count()
+    high = db.query(Alert).filter(
+        Alert.user_id == user_id,
+        Alert.severity == 'high'
+    ).count()
+    medium = db.query(Alert).filter(
+        Alert.user_id == user_id,
+        Alert.severity == 'medium'
+    ).count()
+    low = db.query(Alert).filter(
+        Alert.user_id == user_id,
+        Alert.severity == 'low'
+    ).count()
+    
+    return {
+        "total_alerts": total,
+        "unacknowledged": unacknowledged,
+        "by_severity": {
+            "critical": critical,
+            "high": high,
+            "medium": medium,
+            "low": low
+        }
+    }
 
 
 @router.get("/alerts/{id}", response_model=AlertResponse)
@@ -220,9 +310,8 @@ def get_alert_by_id(id: int, db: Session = Depends(get_db)):
 
 @router.post("/alerts", response_model=AlertResponse, status_code=201)
 def create_alert_route(alert: AlertCreate, db: Session = Depends(get_db)):
-    """Create a new alert manually"""
     from app.services.alert_service import create_alert
-    
+
     db_alert = create_alert(
         db=db,
         user_id=alert.user_id,
@@ -231,9 +320,14 @@ def create_alert_route(alert: AlertCreate, db: Session = Depends(get_db)):
         message=alert.message,
         severity=alert.severity,
         status=alert.status,
-        acknowledged=alert.acknowledged
+        acknowledged=alert.acknowledged,
+        source_ip=alert.source_ip,
+        dest_ip=alert.dest_ip,
+        rmse_score=alert.rmse_score,
+        details=alert.details,
     )
     return db_alert
+
 
 
 @router.put("/alerts/{id}", response_model=AlertResponse)
@@ -279,4 +373,16 @@ def delete_alert_route(id: int, db: Session = Depends(get_db)):
     return {
         "message": "Alert deleted successfully",
         "id": id
+    }
+
+
+@router.delete("/alerts/user/{user_id}/all")
+def delete_all_user_alerts(user_id: int, db: Session = Depends(get_db)):
+    """Delete all alerts for a user"""
+    deleted = db.query(Alert).filter(Alert.user_id == user_id).delete()
+    db.commit()
+    
+    return {
+        "message": f"Deleted {deleted} alerts for user {user_id}",
+        "count": deleted
     }

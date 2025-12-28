@@ -1,0 +1,21 @@
+{
+  "file": "datasets\\CICIDS2017\\preprocessed\\Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX_preprocessed.csv",
+  "timestamp": "20251227_231120",
+  "total_samples": 286452,
+  "anomalies_detected": 114577,
+  "threshold": 0.01,
+  "mean_score": 0.012009854506578106,
+  "std_score": 0.011618850798482147,
+  "min_score": 0.001148579144676192,
+  "max_score": 0.3225241623113962,
+  "metrics": {
+    "TP": 77817,
+    "TN": 90762,
+    "FP": 36760,
+    "FN": 81113,
+    "accuracy": 0.5885069749905744,
+    "precision": 0.679167721270412,
+    "recall": 0.48963065500534825,
+    "f1_score": 0.5690311399708233
+  }
+}

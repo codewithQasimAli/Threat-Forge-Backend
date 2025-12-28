@@ -1,0 +1,21 @@
+{
+  "file": "datasets\\CICIDS2017\\preprocessed\\Friday-WorkingHours-Afternoon-DDos.pcap_ISCX_preprocessed.csv",
+  "timestamp": "20251227_151804",
+  "total_samples": 225741,
+  "anomalies_detected": 124563,
+  "threshold": 0.02,
+  "mean_score": 0.04362946539696227,
+  "std_score": 0.039246078180591226,
+  "min_score": 0.0011340553631784388,
+  "max_score": 0.3365659445108496,
+  "metrics": {
+    "TP": 94096,
+    "TN": 67247,
+    "FP": 30467,
+    "FN": 33931,
+    "accuracy": 0.7147261684851224,
+    "precision": 0.7554089095477791,
+    "recall": 0.7349699672725285,
+    "f1_score": 0.7450492893622075
+  }
+}
