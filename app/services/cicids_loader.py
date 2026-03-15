@@ -18,9 +18,13 @@ Key fixes / guarantees
 - Gives detailed statistics and metrics (no emojis)
 - Optional threshold calibration on BENIGN samples inside the detect file
 - Dynamic alert emission with throttling (avoid flooding DB)
+- ✅ ENCODING FIX: Handles CSV encoding errors (latin-1, ISO-8859-1, UTF-8)
 
 Usage examples
 --------------
+Interactive mode (RECOMMENDED):
+  python app/services/cicids_loader.py --interactive
+
 Train (Monday BENIGN):
   python app/services/cicids_loader.py --mode train \
     --file datasets/CICIDS2017/preprocessed/Monday-WorkingHours.pcap_ISCX_preprocessed.csv \
@@ -121,14 +125,17 @@ def get_file_path(mode: str) -> str:
     """Prompt for file path with file browser"""
     print(f"\nSELECT {mode.upper()} FILE:")
     
-    base_path = Path("datasets/CICIDS2017/preprocessed")
+    base_path = Path("datasets")
     if base_path.exists():
-        files = list(base_path.glob("*.csv"))
+        files = list(base_path.glob("**/*.csv"))
         if files:
             print("\n   Available files:")
             for i, file in enumerate(files, 1):
-                size_mb = file.stat().st_size / (1024 * 1024)
-                print(f"   {i}. {file.name} ({size_mb:.1f} MB)")
+                try:
+                    size_mb = file.stat().st_size / (1024 * 1024)
+                    print(f"   {i}. {file.name} ({size_mb:.1f} MB)")
+                except:
+                    print(f"   {i}. {file.name}")
             print()
             
             choice = input(f"Enter file number (or press Enter for custom path): ").strip()
@@ -156,20 +163,8 @@ def get_max_rows() -> Optional[int]:
 
 
 def get_threshold() -> Optional[float]:
-    """Prompt for detection threshold"""
-    print("\nDETECTION THRESHOLD:")
-    print("   Recommended: 0.020 for DDoS, 0.025-0.030 for other attacks")
-    print("   Press Enter to use saved/auto threshold")
-    
-    choice = input("Threshold: ").strip()
-    if not choice:
-        return None
-    
-    try:
-        return float(choice)
-    except ValueError:
-        print("Invalid number, using auto threshold")
-        return None
+    """Threshold is always loaded automatically from the trained model pkl file."""
+    return None
 
 
 def get_alert_settings() -> Dict:
@@ -217,11 +212,9 @@ def interactive_main():
     file_path = get_file_path(mode)
     max_rows = get_max_rows()
     
-    threshold = None
     alert_settings = {}
-    
+
     if mode == "detect":
-        threshold = get_threshold()
         alert_settings = get_alert_settings()
     
     # Show configuration summary
@@ -232,7 +225,7 @@ def interactive_main():
     print(f"File: {file_path}")
     print(f"Max rows: {max_rows if max_rows else 'ALL'}")
     if mode == "detect":
-        print(f"Threshold: {threshold if threshold else 'AUTO'}")
+        print(f"Threshold: AUTO (loaded from trained model)")
         if alert_settings.get('emit_alerts'):
             print(f"Alerts: YES")
             print(f"  API URL: {alert_settings['api_url']}")
@@ -261,7 +254,7 @@ def interactive_main():
         print("\nDETECTION MODE")
         print("Detecting anomalies...")
         loader.detect(
-            threshold=threshold,
+            threshold=None,
             max_samples=max_rows,
             emit_alerts=alert_settings.get('emit_alerts', False),
             api_url=alert_settings.get('api_url', 'http://localhost:8000'),
@@ -444,7 +437,7 @@ class CICIDSLoader:
         self.training_file: Optional[str] = None
 
     # -----------------------------
-    # Data loading
+    # Data loading with ENCODING FIX
     # -----------------------------
     def load_data(self, max_rows: Optional[int] = None) -> pd.DataFrame:
         print("=" * 70)
@@ -456,12 +449,62 @@ class CICIDSLoader:
             raise FileNotFoundError(f"File not found: {self.csv_file}")
 
         print("Reading CSV...")
-        if max_rows:
-            self.df = pd.read_csv(self.csv_file, nrows=max_rows)
-            print(f"Loaded first {max_rows:,} rows")
+        
+        # ✅ ENCODING FIX: Try multiple encodings
+        encodings_to_try = ['utf-8', 'latin-1', 'ISO-8859-1', 'cp1252']
+        
+        for encoding in encodings_to_try:
+            try:
+                print(f"Trying encoding: {encoding}")
+                if max_rows:
+                    self.df = pd.read_csv(
+                        self.csv_file, 
+                        nrows=max_rows, 
+                        encoding=encoding,
+                        on_bad_lines='skip',  # Skip problematic lines
+                        low_memory=False
+                    )
+                    print(f"Loaded first {max_rows:,} rows with {encoding} encoding")
+                else:
+                    self.df = pd.read_csv(
+                        self.csv_file, 
+                        encoding=encoding,
+                        on_bad_lines='skip',
+                        low_memory=False
+                    )
+                    print(f"Loaded {len(self.df):,} rows with {encoding} encoding")
+                break  # Success! Exit the loop
+                
+            except UnicodeDecodeError:
+                print(f"Failed with {encoding}, trying next encoding...")
+                continue
+            except Exception as e:
+                print(f"Error with {encoding}: {e}")
+                continue
         else:
-            self.df = pd.read_csv(self.csv_file)
-            print(f"Loaded {len(self.df):,} rows")
+            # If all encodings fail, try one last time with errors='ignore'
+            print("All standard encodings failed. Trying UTF-8 with errors='ignore'...")
+            try:
+                if max_rows:
+                    self.df = pd.read_csv(
+                        self.csv_file, 
+                        nrows=max_rows, 
+                        encoding='utf-8',
+                        errors='ignore',
+                        on_bad_lines='skip',
+                        low_memory=False
+                    )
+                else:
+                    self.df = pd.read_csv(
+                        self.csv_file, 
+                        encoding='utf-8',
+                        errors='ignore',
+                        on_bad_lines='skip',
+                        low_memory=False
+                    )
+                print(f"Loaded {len(self.df):,} rows with UTF-8 (errors ignored)")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load CSV with any encoding: {e}")
 
         print(f"Columns: {len(self.df.columns)}")
 
@@ -824,12 +867,56 @@ class CICIDSLoader:
         # If threshold not given, compute a fallback from this run after collecting rmse
         rmse_scores = np.zeros(n_samples, dtype=float)
 
+        src_ip_col = None
+        dst_ip_col = None
+        benign_filtered = 0
+        attack_anomalies = 0
+        if emitter is not None:
+            src_ip_col = "Source IP" if "Source IP" in self.df.columns else None
+            dst_ip_col = "Destination IP" if "Destination IP" in self.df.columns else None
+
         start_time = datetime.now()
         print(f"\nProcessing {n_samples:,} samples...")
 
         for i in range(n_samples):
             rmse = self.kitsune.process(X[i])
             rmse_scores[i] = float(rmse) if rmse is not None else 0.0
+
+            if emitter is not None and threshold is not None and rmse_scores[i] > threshold:
+                if labels is not None and labels[i] == "BENIGN":
+                    benign_filtered += 1
+                else:
+                    attack_anomalies += 1
+                    sev = emitter.severity(rmse_scores[i], threshold)
+                    src_ip = str(self.df.iloc[i][src_ip_col]) if src_ip_col else None
+                    dst_ip = str(self.df.iloc[i][dst_ip_col]) if dst_ip_col else None
+                    true_label = str(labels[i]) if labels is not None else None
+                    details = {
+                        "file": str(self.csv_file),
+                        "row_index": int(i),
+                        "true_label": true_label,
+                        "threshold": float(threshold),
+                        "rmse": rmse_scores[i],
+                    }
+                    for col in ["Source Port", "Destination Port", "Protocol", "Flow Duration"]:
+                        if col in self.df.columns:
+                            val = self.df.iloc[i][col]
+                            try:
+                                details[col] = float(val) if "Duration" in col else int(val)
+                            except Exception:
+                                details[col] = str(val)
+                    payload = {
+                        "title": f"{true_label} detected" if true_label else "Network anomaly detected",
+                        "message": f"RMSE={rmse_scores[i]:.6f} exceeded threshold={threshold:.6f}",
+                        "severity": sev,
+                        "status": "active",
+                        "acknowledged": False,
+                        "source_ip": src_ip,
+                        "dest_ip": dst_ip,
+                        "rmse_score": rmse_scores[i],
+                        "details": json.dumps(details),
+                    }
+                    emitter.send_alert(payload, row_index=i)
 
             if (i + 1) % 10000 == 0:
                 elapsed = (datetime.now() - start_time).total_seconds()
@@ -845,14 +932,6 @@ class CICIDSLoader:
         print(f"\nDetection completed in {elapsed_total:.2f} minutes")
 
         # Optional calibration on BENIGN inside the detect file
-        # IMPORTANT: Calibration should be done BEFORE classifying anomalies.
-        # We already processed full file once above, so calibration must NOT call process() again on same KitNET
-        # because KitNET execute-mode updates internal state (though typically in execute it doesn't train, but to be safe).
-        # Therefore: for calibration we recommend providing threshold manually OR running detect with --max-rows on benign subset.
-        #
-        # However, many KitNET implementations do not update weights in execute-mode; still, double pass can shift behavior.
-        # So here we do a safer approach:
-        # - If user asks calibrate_benign, we compute threshold from *observed RMSE* of BENIGN rows from this pass.
         if calibrate_benign is not None and labels is not None:
             benign_mask = (labels == "BENIGN")
             benign_scores = rmse_scores[benign_mask]
@@ -896,19 +975,13 @@ class CICIDSLoader:
             f"min={rmse_scores.min():.6f}, max={rmse_scores.max():.6f}"
         )
 
-        # Metrics if labels exist
-        if labels is not None:
-            self.calculate_metrics(labels, predictions)
-
-        # Emit alerts dynamically
+        # Alert summary (alerts were emitted in real-time during the processing loop)
         if emit_alerts and emitter is not None:
-            self.emit_alerts_from_predictions(
-                emitter=emitter,
-                rmse_scores=rmse_scores,
-                predictions=predictions,
-                threshold=float(threshold),
-                labels=labels,
-            )
+            print(f"\nAlert Statistics:")
+            print(f"  Total anomalies detected: {attack_anomalies + benign_filtered:,}")
+            print(f"  BENIGN filtered out: {benign_filtered:,}")
+            print(f"  Attack anomalies: {attack_anomalies:,}")
+            print(f"  Alerts created (throttled): {emitter.sent_count:,}")
             print(f"\nDynamic alerts created in DB: {emitter.sent_count}")
             if emitter.failed_count > 0:
                 print(f"Dynamic alert POST failures: {emitter.failed_count}")
@@ -916,84 +989,11 @@ class CICIDSLoader:
         # Save detection results
         self.save_detection_results(rmse_scores, predictions, labels, threshold)
 
+        # Metrics if labels exist
+        if labels is not None:
+            self.calculate_metrics(labels, predictions)
+
         return rmse_scores, predictions
-
-    def emit_alerts_from_predictions(
-        self,
-        emitter: AlertEmitter,
-        rmse_scores: np.ndarray,
-        predictions: np.ndarray,
-        threshold: float,
-        labels: Optional[np.ndarray],
-    ) -> None:
-        """
-        Create alerts dynamically in your DB through your FastAPI endpoint.
-        Tries to include Source IP / Destination IP if present in CSV.
-        """
-        assert self.df is not None
-
-        # These columns exist in many CICIDS preprocessed exports
-        src_ip_col = "Source IP" if "Source IP" in self.df.columns else None
-        dst_ip_col = "Destination IP" if "Destination IP" in self.df.columns else None
-
-        sent_before = emitter.sent_count
-        attack_anomalies = 0
-        benign_filtered = 0  # Track how many BENIGN we filtered out
-
-
-        for i in range(len(predictions)):
-            if predictions[i] != 1:
-                continue
-
-            if labels is not None:
-             if labels[i] == "BENIGN":
-                benign_filtered += 1
-                continue  # Skip to next iteration - NO ALERT FOR BENIGN
-             
-            attack_anomalies += 1
-            rmse = float(rmse_scores[i])
-            sev = emitter.severity(rmse, threshold)
-
-            src_ip = str(self.df.iloc[i][src_ip_col]) if src_ip_col else None
-            dst_ip = str(self.df.iloc[i][dst_ip_col]) if dst_ip_col else None
-
-            true_label = str(labels[i]) if labels is not None else None
-
-            details = {
-                "file": str(self.csv_file),
-                "row_index": int(i),
-                "true_label": true_label,
-                "threshold": float(threshold),
-                "rmse": rmse,
-            }
-
-            # extra context if available
-            for col in ["Source Port", "Destination Port", "Protocol", "Flow Duration"]:
-                if col in self.df.columns:
-                    val = self.df.iloc[i][col]
-                    try:
-                        details[col] = float(val) if "Duration" in col else int(val)
-                    except Exception:
-                        details[col] = str(val)
-
-            payload = {
-                "title": "Network anomaly detected",
-                "message": f"RMSE={rmse:.6f} exceeded threshold={threshold:.6f}",
-                "severity": sev,
-                "status": "active",
-                "acknowledged": False,
-                "source_ip": src_ip,
-                "dest_ip": dst_ip,
-                "rmse_score": rmse,
-                "details": json.dumps(details),
-            }
-
-            emitter.send_alert(payload, row_index=i)
-
-        sent_after = emitter.sent_count
-        created = sent_after - sent_before
-        print(f"\nAlerts attempted from anomalies: {int(predictions.sum()):,}")
-        print(f"Alerts actually created (throttled): {created:,}")
 
     # -----------------------------
     # Metrics
@@ -1228,11 +1228,6 @@ def main() -> None:
         print("Error: --mode and --file are required for command-line mode")
         print("Use --interactive for interactive mode")
         return
-
-    # Your original code continues here...
-    print("=" * 70)
-    print("CICIDS2017 LOADER FOR KITSUNE IDS")
-    # ... everything else stays the same
 
     print("=" * 70)
     print("CICIDS2017 LOADER FOR KITSUNE IDS")
