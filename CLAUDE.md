@@ -62,3 +62,52 @@ REDIS_HOST, REDIS_PORT, REDIS_DB
 - Pydantic schemas (request/response models) are defined inline in each router file, not in a separate schemas directory.
 - `app/main.py` imports all models before calling `create_all` to ensure SQLAlchemy sees all table definitions.
 - Trained Kitsune models are serialized as `.pkl` files in the `models/` directory.
+
+## FYP2 Progress
+
+### Completed
+- `app/services/cicids_loader.py` — threshold fix applied, now always loads from pkl automatically, never asks user to type threshold
+- `app/services/pcap_to_features.py` — NEW file created, reads PCAP files and extracts 52 CICIDS2017 features in exact same order as `cicids_loader.py` `feature_columns`, uses scapy, groups packets into bidirectional flows, outputs list of dicts with `features`/`src_ip`/`dst_ip`/`src_port`/`dst_port`/`protocol`/`flow_duration`/`packet_count`/`start_time`
+
+### GNS3 Topology — COMPLETE AND VERIFIED
+- GNS3 project: **ThreatForge**, local server mode, port 3080
+- **Home-Router**: Ethernet switch connecting all nodes
+- **SmartCamera**: VPCS, IP `192.168.56.10`, connected to Home-Router Ethernet0
+- **SmartThermostat**: VPCS, IP `192.168.56.20`, connected to Home-Router Ethernet1
+- **SmartLock**: VPCS, IP `192.168.56.30`, connected to Home-Router Ethernet2
+- **Cloud1**: VMnet8 bridge, connected to Home-Router Ethernet3
+- **Kali Linux VM**: VMware NAT (VMnet8), IP `192.168.56.128`, hping3 + nmap installed
+- Packet capture: right-click cable → Start capture → auto-saves to `C:\Users\USER\GNS3\projects\ThreatForge\project-files\captures\`
+- PCAP save path for `run_simulation.py`: `simulation/captures/` inside backend folder
+- `pcap_to_features.py` tested on real GNS3 traffic: extracted 1 flow, shape `(52,)` — VERIFIED
+
+### Next Files to Build (in order)
+1. `app/services/run_simulation.py` — full orchestrator (see spec below)
+2. `app/services/gns3_client.py` — wrapper for GNS3 REST API calls (start/stop nodes, get PCAP path)
+3. `app/routers/simulation_router.py` — routes: `GET /simulation/history`, `GET /simulation/latest`
+4. `app/routers/network_log_router.py` — routes: `GET /logs` with filters
+5. `app/models/simulation_model.py` — DB table for simulation run history
+6. `app/models/network_log_model.py` — DB table for per-flow network logs
+7. `SimulationScreen.js` (frontend) — results dashboard, sim history, live alert feed
+8. `NetworkLogsScreen.js` (frontend) — table of IP/protocol/timestamp/RMSE per flow
+
+### Next: run_simulation.py Spec
+- **Location**: `app/services/run_simulation.py`
+- **Purpose**: Full orchestrator — controls GNS3 via REST API, triggers attacks via SSH to Kali, captures PCAP, calls `pcap_to_features.py`, feeds Kitsune, creates alerts
+- **GNS3 REST API base URL**: `http://localhost:3080/v2`
+- **Kali SSH**: `192.168.56.128`, user: `kali`, password: `kali`
+- **Attack 1 — DDoS**: `hping3 -S --flood -V -p 80 192.168.56.10` (30 seconds)
+- **Attack 2 — PortScan**: `nmap -sS 192.168.56.10 192.168.56.20 192.168.56.30`
+- **PCAP output folder**: `C:/Users/USER/GNS3/projects/ThreatForge/project-files/captures/`
+- After capture: call `pcap_to_features.extract_features_from_pcap(pcap_path)`
+- Then: load Kitsune model from `models/kitsune_latest.pkl`
+- Then: for each flow, apply normalization, run `kitsune.process()`, check RMSE vs threshold
+- Then: if RMSE > threshold, call `alert_service` to create alert
+- Save simulation run to `SimulationRun` DB model (to be created)
+- **Kitsune model path**: `models/kitsune_latest.pkl` (already trained and saved)
+
+### Architecture
+- **Approach B**: backend script runs simulation (not user-triggered from app)
+- `run_simulation.py` runs from terminal, feeds pipeline, alerts go to DB via `alert_service.py`
+- `SimulationScreen.js` is a results dashboard only, not a control panel
+- `cicids_loader.py` kept as demo/fallback tool, NOT part of the GNS3 pipeline
