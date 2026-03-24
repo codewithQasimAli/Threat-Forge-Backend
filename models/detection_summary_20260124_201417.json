@@ -1,0 +1,21 @@
+{
+  "file": "datasets\\CICIDS2017\\preprocessed\\Monday-WorkingHours.pcap_ISCX_preprocessed.csv",
+  "timestamp": "20260124_201417",
+  "total_samples": 529854,
+  "anomalies_detected": 29239,
+  "threshold": 0.04815723780310197,
+  "mean_score": 0.013530196645851521,
+  "std_score": 0.15853046715788968,
+  "min_score": 0.0013402195257686859,
+  "max_score": 83.61552434704483,
+  "metrics": {
+    "TP": 0,
+    "TN": 500615,
+    "FP": 29239,
+    "FN": 0,
+    "accuracy": 0.9448168740822944,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1_score": 0.0
+  }
+}

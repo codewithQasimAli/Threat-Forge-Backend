@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from app.models.device import Device  # Ensure you import the Device model
+from app.models.device import Device
 
 router = APIRouter()
 
@@ -22,7 +22,7 @@ class DeviceCreate(BaseModel):
     ip_address: str
     mac_address: str
     status: str
-    user_id: int  # New field for the foreign key reference to User
+    user_id: int
 
 class DeviceUpdate(BaseModel):
     device_name: Optional[str] = None
@@ -39,7 +39,7 @@ class DeviceResponse(BaseModel):
     mac_address: str
     status: str
     created_at: datetime
-    user_id: int  # Include user_id in the response
+    user_id: int
 
     class Config:
         from_attributes = True
@@ -48,17 +48,45 @@ class DeleteMessage(BaseModel):
     message: str
 
 
-# Create Device
+# CREATE DEVICE WITH DUPLICATE VALIDATION
 @router.post("/device", response_model=DeviceResponse)
 def create_device_route(device: DeviceCreate, db: Session = Depends(get_db)):
+    # Check for duplicate IP address (per user)
+    existing_ip = db.query(Device).filter(
+        Device.user_id == device.user_id,
+        Device.ip_address == device.ip_address
+    ).first()
+    
+    if existing_ip:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Device with IP address {device.ip_address} already exists for this user"
+        )
+    
+    # Check for duplicate MAC address (per user)
+    # Normalize MAC address to uppercase for comparison
+    normalized_mac = device.mac_address.upper().replace('-', ':')
+    
+    existing_mac = db.query(Device).filter(
+        Device.user_id == device.user_id,
+        Device.mac_address == normalized_mac
+    ).first()
+    
+    if existing_mac:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Device with MAC address {device.mac_address} already exists for this user"
+        )
+    
+    # Create device if no duplicates
     db_device = create_device(
         db=db, 
         device_name=device.device_name,
         device_type=device.device_type,
         ip_address=device.ip_address,
-        mac_address=device.mac_address,
+        mac_address=normalized_mac,  # Store normalized MAC
         status=device.status,
-        user_id=device.user_id  # Pass user_id to associate the device with a user
+        user_id=device.user_id
     )
     return db_device
 
@@ -70,7 +98,6 @@ def get_device_route(id: int, db: Session = Depends(get_db)):
     if db_device is None:
         raise HTTPException(status_code=404, detail="Device not found")
     
-    # Dynamically add last_seen and updated_at
     device_payload = {
         "id": db_device.id,
         "device_name": db_device.device_name,
@@ -79,10 +106,11 @@ def get_device_route(id: int, db: Session = Depends(get_db)):
         "mac_address": db_device.mac_address,
         "status": db_device.status,
         "created_at": db_device.created_at,
-        "user_id": db_device.user_id,  # Include user_id in the response
+        "user_id": db_device.user_id,
     }
 
     return device_payload
+
 
 # Get All Devices
 @router.get("/devices/all", response_model=list[DeviceResponse])
@@ -98,23 +126,62 @@ def get_user_devices(user_id: int, skip: int = 0, limit: int = 100, db: Session 
     return devices
 
 
-# Update Device by ID
+# UPDATE DEVICE WITH DUPLICATE VALIDATION
 @router.put("/device/{id}", response_model=DeviceResponse)
 def update_device_route(id: int, device: DeviceUpdate, db: Session = Depends(get_db)):
-    db_device = update_device_by_id(db=db, id=id, **device.dict(exclude_unset=True))
-    if db_device is None:
+    # ✅ Get existing device
+    existing_device = get_device_by_id(db=db, id=id)
+    if existing_device is None:
         raise HTTPException(status_code=404, detail="Device not found")
+    
+    update_data = device.dict(exclude_unset=True)
+    
+    # Check for duplicate IP (if IP is being changed)
+    if 'ip_address' in update_data:
+        new_ip = update_data['ip_address']
+        if new_ip != existing_device.ip_address:
+            duplicate_ip = db.query(Device).filter(
+                Device.user_id == existing_device.user_id,
+                Device.ip_address == new_ip,
+                Device.id != id  # Exclude current device
+            ).first()
+            
+            if duplicate_ip:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Device with IP address {new_ip} already exists for this user"
+                )
+    
+    # Check for duplicate MAC (if MAC is being changed)
+    if 'mac_address' in update_data:
+        normalized_mac = update_data['mac_address'].upper().replace('-', ':')
+        if normalized_mac != existing_device.mac_address:
+            duplicate_mac = db.query(Device).filter(
+                Device.user_id == existing_device.user_id,
+                Device.mac_address == normalized_mac,
+                Device.id != id  # Exclude current device
+            ).first()
+            
+            if duplicate_mac:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Device with MAC address {update_data['mac_address']} already exists for this user"
+                )
+        
+        # Store normalized MAC
+        update_data['mac_address'] = normalized_mac
+    
+    # Update device if no duplicates
+    db_device = update_device_by_id(db=db, id=id, **update_data)
     return db_device
 
 
 # Delete Device by ID
 @router.delete("/device/{id}", response_model=DeleteMessage)
 def delete_device_route(id: int, db: Session = Depends(get_db)):
-    # delete_device_by_id already handles the deletion and returns True/False
     success = delete_device_by_id(db=db, id=id)
     
     if not success:
         raise HTTPException(status_code=404, detail="Device not found")
     
     return {"message": "Device deleted successfully"}
-    

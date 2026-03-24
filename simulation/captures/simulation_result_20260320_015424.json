@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-03-20T01:54:24.550227",
+  "pcap_file": "simulation/captures/latest_capture.pcap",
+  "total_flows": 0,
+  "anomalies_detected": 0,
+  "alerts_created": 0,
+  "attack_types": [
+    "DDoS"
+  ],
+  "results": []
+}

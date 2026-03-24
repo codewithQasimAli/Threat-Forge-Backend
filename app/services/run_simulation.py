@@ -255,12 +255,51 @@ class KaliAttacker:
             return False
 
     # ------------------------------------------------------------------ #
+    def start_tcpdump(self, output_file="/tmp/threatforge_capture.pcap") -> bool:
+        try:
+            self._client.exec_command("echo 'kali' | sudo -S pkill tcpdump 2>/dev/null")
+            time.sleep(1)
+            transport = self._client.get_transport()
+            channel = transport.open_session()
+            channel.exec_command(f"echo 'kali' | sudo -S tcpdump -i eth0 -w {output_file}")
+            time.sleep(2)
+            print(f"  tcpdump started on eth0, writing to {output_file}")
+            return True
+        except Exception as exc:
+            print(f"  ERROR starting tcpdump: {exc}")
+            return False
+
+    # ------------------------------------------------------------------ #
+    def stop_tcpdump(self) -> bool:
+        try:
+            self._client.exec_command("echo 'kali' | sudo -S pkill -SIGINT tcpdump")
+            time.sleep(3)
+            print("  tcpdump stopped")
+            return True
+        except Exception as exc:
+            print(f"  ERROR stopping tcpdump: {exc}")
+            return False
+
+    # ------------------------------------------------------------------ #
+    def download_pcap(self, remote_path="/tmp/threatforge_capture.pcap", local_path="simulation/captures/latest_capture.pcap") -> str:
+        try:
+            os.makedirs("simulation/captures", exist_ok=True)
+            sftp = self._client.open_sftp()
+            sftp.get(remote_path, local_path)
+            sftp.close()
+            print(f"  PCAP downloaded to {local_path}")
+            return local_path
+        except Exception as exc:
+            print(f"  ERROR downloading PCAP: {exc}")
+            return None
+
+    # ------------------------------------------------------------------ #
     def run_ddos(self, target_ip: str = SMART_CAMERA_IP, duration: int = ATTACK_DURATION_SECONDS):
         """
         Launch hping3 SYN flood in the background (non-blocking).
         The remote process is wrapped in `timeout` so it self-terminates.
         """
-        cmd = f"timeout {duration} hping3 -S --flood -V -p 80 {target_ip}"
+        cmd = f"echo 'kali' | sudo -S timeout {duration} hping3 -S --flood -V -p 80 {target_ip}"
         try:
             # get_pty=False + no exec_command wait → fire-and-forget
             transport = self._client.get_transport()
@@ -280,7 +319,7 @@ class KaliAttacker:
             targets = [SMART_CAMERA_IP, SMART_THERMOSTAT_IP, SMART_LOCK_IP]
 
         target_str = " ".join(targets)
-        cmd = f"nmap -sS {target_str}"
+        cmd = f"echo 'kali' | sudo -S nmap -Pn -sS {target_str}"
         try:
             _, stdout, stderr = self._client.exec_command(cmd, timeout=120)
             output = stdout.read().decode(errors="replace")
@@ -335,9 +374,15 @@ class KitsuneDetector:
 
     # ------------------------------------------------------------------ #
     def normalize(self, X: np.ndarray) -> np.ndarray:
-        """Apply the same min-max normalization used during training."""
-        Xn = (X - self.norm_params["min"]) / self.norm_params["range"]
-        return np.clip(Xn, 0.0, 1.0)
+        try:
+            min_vals = self.norm_params["min"]
+            range_vals = self.norm_params["range"]
+            if min_vals.shape[0] != X.shape[0] or range_vals.shape[0] != X.shape[0]:
+                return np.clip(X, 0.0, 1.0)
+            Xn = (X - min_vals) / (range_vals + 1e-10)
+            return np.clip(Xn, 0.0, 1.0)
+        except Exception:
+            return np.clip(X, 0.0, 1.0)
 
     # ------------------------------------------------------------------ #
     def _severity(self, rmse: float) -> str:
@@ -363,6 +408,8 @@ class KitsuneDetector:
         for flow in flows:
             try:
                 features = np.array(flow["features"], dtype=np.float64)
+                if len(features) != 52:
+                    continue
                 normalized = self.normalize(features)
                 rmse = float(self.kitsune.process(normalized))
                 is_anomaly = rmse > self.threshold
@@ -470,6 +517,71 @@ def save_simulation_result(
     return out_path
 
 
+def save_simulation_to_db(results: list, attack_types: list, alerts_created: int, pcap_path: str, duration: int):
+    try:
+        import sys
+        from pathlib import Path
+        root_dir = Path(__file__).parent.parent.parent
+        sys.path.insert(0, str(root_dir))
+        from app.database import SessionLocal
+        from app.models.simulation import SimulationRun
+        db = SessionLocal()
+        run = SimulationRun(
+            attack_types=attack_types,
+            total_flows=len(results),
+            anomalies_detected=sum(1 for r in results if r.get("is_anomaly")),
+            alerts_created=alerts_created,
+            pcap_file=pcap_path,
+            status="completed",
+            duration_seconds=duration,
+            results_json=results[:20] if results else []
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        db.close()
+        print(f"  Simulation run saved to database: {run.id}")
+        return run.id
+    except Exception as exc:
+        print(f"  WARNING: Could not save simulation to DB: {exc}")
+        return None
+
+
+def save_network_logs_to_db(results: list, simulation_run_id: str):
+    try:
+        import sys
+        from pathlib import Path
+        root_dir = Path(__file__).parent.parent.parent
+        sys.path.insert(0, str(root_dir))
+        from app.database import SessionLocal
+        from app.models.network_log import NetworkLog
+        from datetime import datetime
+        db = SessionLocal()
+        count = 0
+        for result in results:
+            log = NetworkLog(
+                simulation_run_id=simulation_run_id,
+                src_ip=result.get("src_ip", ""),
+                dst_ip=result.get("dst_ip", ""),
+                src_port=result.get("src_port", 0),
+                dst_port=result.get("dst_port", 0),
+                protocol=result.get("protocol", 0),
+                flow_duration=result.get("flow_duration", 0.0),
+                packet_count=result.get("packet_count", 0),
+                rmse_score=result.get("rmse", 0.0),
+                is_anomaly=result.get("is_anomaly", False),
+                severity=result.get("severity", "none"),
+                timestamp=datetime.utcnow()
+            )
+            db.add(log)
+            count += 1
+        db.commit()
+        db.close()
+        print(f"  Network logs saved to database: {count} flows")
+    except Exception as exc:
+        print(f"  WARNING: Could not save network logs to DB: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
@@ -514,24 +626,24 @@ def run_simulation(
         return None
 
     # ------------------------------------------------------------------ #
-    # Step 3 — Start packet capture
+    # Step 3 — Connect Kali VM
     # ------------------------------------------------------------------ #
-    print("\n[2/8] Starting packet capture...")
-    if not gns3.start_capture(project_id, link_id):
-        print("  ERROR: Failed to start packet capture. Aborting.")
-        return None
-    print("  Packet capture started")
-    time.sleep(2)   # let GNS3 open the capture file
-
-    # ------------------------------------------------------------------ #
-    # Step 4 — Connect Kali and run attacks
-    # ------------------------------------------------------------------ #
-    print("\n[3/8] Connecting to Kali VM...")
+    print("\n[2/8] Connecting to Kali VM...")
     attacker = KaliAttacker()
     if not attacker.connect():
         print("  ERROR: Cannot connect to Kali VM. Is it running?")
-        gns3.stop_capture(project_id, link_id)
         return None
+
+    # ------------------------------------------------------------------ #
+    # Step 4 — Start tcpdump capture on Kali
+    # ------------------------------------------------------------------ #
+    print("\n[3/8] Starting packet capture on Kali (tcpdump)...")
+    if not attacker.start_tcpdump():
+        print("  ERROR: Failed to start tcpdump. Aborting.")
+        attacker.disconnect()
+        return None
+    print("  Packet capture started")
+    time.sleep(2)
 
     print(f"\n[4/8] Running attack type: {attack_type}")
     attack_types_used = []
@@ -548,19 +660,15 @@ def run_simulation(
         print(f"  Waiting {duration}s for DDoS to complete...")
         time.sleep(duration)
 
+    # ------------------------------------------------------------------ #
+    # Step 5 — Stop capture and download PCAP from Kali
+    # ------------------------------------------------------------------ #
+    print("\n[5/8] Stopping capture and downloading PCAP...")
+    attacker.stop_tcpdump()
+    pcap_path = attacker.download_pcap()
     attacker.disconnect()
-
-    # ------------------------------------------------------------------ #
-    # Step 5 — Stop capture and locate PCAP
-    # ------------------------------------------------------------------ #
-    print("\n[5/8] Stopping capture...")
-    gns3.stop_capture(project_id, link_id)
-    print("  Capture stopped")
-    time.sleep(3)   # give GNS3 time to flush and close the file
-
-    pcap_path = gns3.get_latest_pcap()
     if not pcap_path:
-        print("  ERROR: No PCAP file found in GNS3 captures directory.")
+        print("  ERROR: Failed to download PCAP from Kali.")
         return None
     print(f"  PCAP file: {pcap_path}")
 
@@ -613,6 +721,8 @@ def run_simulation(
     # Step 9 — Persist results
     # ------------------------------------------------------------------ #
     save_simulation_result(results, pcap_path, attack_types_used, alerts_created)
+    run_id = save_simulation_to_db(results, attack_types_used, alerts_created, pcap_path, duration)
+    save_network_logs_to_db(results, run_id or "")
 
     # ------------------------------------------------------------------ #
     # Summary

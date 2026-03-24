@@ -1,0 +1,11 @@
+{
+  "file": "datasets\\CICIDS2017\\preprocessed\\Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv",
+  "timestamp": "20260126_114152",
+  "total_samples": 458968,
+  "anomalies_detected": 166806,
+  "threshold": 6.888913287079155e-06,
+  "mean_score": 0.01133361346790206,
+  "std_score": 0.031092103235389298,
+  "min_score": 3.2516760936292355e-08,
+  "max_score": 0.6251957406881927
+}

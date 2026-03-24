@@ -1,0 +1,120 @@
+{
+  "timestamp": "2026-03-20T02:03:45.117562",
+  "pcap_file": "simulation/captures/latest_capture.pcap",
+  "total_flows": 9,
+  "anomalies_detected": 9,
+  "alerts_created": 9,
+  "attack_types": [
+    "DDoS"
+  ],
+  "results": [
+    {
+      "src_ip": "192.168.56.1",
+      "dst_ip": "192.168.56.128",
+      "src_port": 2216,
+      "dst_port": 22,
+      "protocol": 6,
+      "flow_duration": 33.91658091545105,
+      "packet_count": 15,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 45133,
+      "protocol": 17,
+      "flow_duration": 0.021481990814208984,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 46308,
+      "protocol": 17,
+      "flow_duration": 0.019915103912353516,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 50478,
+      "protocol": 17,
+      "flow_duration": 0.023433923721313477,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 45543,
+      "protocol": 17,
+      "flow_duration": 0.02435302734375,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 46327,
+      "protocol": 17,
+      "flow_duration": 0.02218484878540039,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 60197,
+      "protocol": 17,
+      "flow_duration": 0.02367401123046875,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "157.20.147.14",
+      "dst_ip": "192.168.56.128",
+      "src_port": 123,
+      "dst_port": 53551,
+      "protocol": 17,
+      "flow_duration": 0.022468090057373047,
+      "packet_count": 2,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    },
+    {
+      "src_ip": "192.168.56.1",
+      "dst_ip": "192.168.56.128",
+      "src_port": 4404,
+      "dst_port": 22,
+      "protocol": 6,
+      "flow_duration": 0.024977922439575195,
+      "packet_count": 10,
+      "rmse": 1.2237912870522678,
+      "is_anomaly": true,
+      "severity": "critical"
+    }
+  ]
+}
