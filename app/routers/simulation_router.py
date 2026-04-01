@@ -6,11 +6,15 @@ from app.models.simulation import SimulationRun
 router = APIRouter()
 
 @router.get("/simulation/history")
-def get_simulation_history(limit: int = 10, db: Session = Depends(get_db)):
-    runs = db.query(SimulationRun).order_by(SimulationRun.timestamp.desc()).limit(limit).all()
+def get_simulation_history(limit: int = 10, user_id: int = None, db: Session = Depends(get_db)):
+    query = db.query(SimulationRun).order_by(SimulationRun.timestamp.desc())
+    if user_id:
+        query = query.filter(SimulationRun.user_id == user_id)
+    runs = query.limit(limit).all()
     return [
         {
             "id": r.id,
+            "user_id": r.user_id,
             "timestamp": r.timestamp.isoformat(),
             "attack_types": r.attack_types,
             "total_flows": r.total_flows,
@@ -24,12 +28,16 @@ def get_simulation_history(limit: int = 10, db: Session = Depends(get_db)):
     ]
 
 @router.get("/simulation/latest")
-def get_latest_simulation(db: Session = Depends(get_db)):
-    run = db.query(SimulationRun).order_by(SimulationRun.timestamp.desc()).first()
+def get_latest_simulation(user_id: int = None, db: Session = Depends(get_db)):
+    query = db.query(SimulationRun).order_by(SimulationRun.timestamp.desc())
+    if user_id:
+        query = query.filter(SimulationRun.user_id == user_id)
+    run = query.first()
     if not run:
         raise HTTPException(status_code=404, detail="No simulation runs found")
     return {
         "id": run.id,
+        "user_id": run.user_id,
         "timestamp": run.timestamp.isoformat(),
         "attack_types": run.attack_types,
         "total_flows": run.total_flows,

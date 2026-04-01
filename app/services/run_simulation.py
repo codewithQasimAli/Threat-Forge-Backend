@@ -51,6 +51,46 @@ else:
 # Also add root_dir so app.services.pcap_to_features can be imported
 sys.path.insert(0, str(root_dir))
 
+
+# ---------------------------------------------------------------------------
+# Device lookup helper
+# ---------------------------------------------------------------------------
+def lookup_device_by_ip(target_ip):
+    """Look up device and owner from database by IP address."""
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _root = _Path(__file__).parent.parent.parent
+        _sys.path.insert(0, str(_root))
+        from app.database import SessionLocal
+        from app.models.device import Device
+        db = SessionLocal()
+        device = db.query(Device).filter(Device.ip_address == target_ip).first()
+        if device:
+            result = {
+                "device_id": device.id,
+                "device_name": device.device_name,
+                "device_type": device.device_type,
+                "ip_address": device.ip_address,
+                "user_id": device.user_id,
+            }
+            try:
+                from app.models.user import User
+                user = db.query(User).filter(User.id == device.user_id).first()
+                result["user_name"] = user.name if user else "Unknown"
+                result["user_email"] = user.email if user else "Unknown"
+            except:
+                result["user_name"] = "Unknown"
+                result["user_email"] = "Unknown"
+            db.close()
+            return result
+        db.close()
+        return None
+    except Exception as exc:
+        print(f"  WARNING: Could not look up device: {exc}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -517,7 +557,7 @@ def save_simulation_result(
     return out_path
 
 
-def save_simulation_to_db(results: list, attack_types: list, alerts_created: int, pcap_path: str, duration: int):
+def save_simulation_to_db(results: list, attack_types: list, alerts_created: int, pcap_path: str, duration: int, user_id: int = 1):
     try:
         import sys
         from pathlib import Path
@@ -527,6 +567,7 @@ def save_simulation_to_db(results: list, attack_types: list, alerts_created: int
         from app.models.simulation import SimulationRun
         db = SessionLocal()
         run = SimulationRun(
+            user_id=user_id,
             attack_types=attack_types,
             total_flows=len(results),
             anomalies_detected=sum(1 for r in results if r.get("is_anomaly")),
@@ -547,7 +588,7 @@ def save_simulation_to_db(results: list, attack_types: list, alerts_created: int
         return None
 
 
-def save_network_logs_to_db(results: list, simulation_run_id: str):
+def save_network_logs_to_db(results: list, simulation_run_id: str, user_id: str = "1"):
     try:
         import sys
         from pathlib import Path
@@ -561,6 +602,7 @@ def save_network_logs_to_db(results: list, simulation_run_id: str):
         for result in results:
             log = NetworkLog(
                 simulation_run_id=simulation_run_id,
+                user_id=user_id,
                 src_ip=result.get("src_ip", ""),
                 dst_ip=result.get("dst_ip", ""),
                 src_port=result.get("src_port", 0),
@@ -591,6 +633,7 @@ def run_simulation(
     device_id: int | None = None,
     api_url: str = "http://localhost:8000",
     duration: int = ATTACK_DURATION_SECONDS,
+    target_ip: str = None,
 ) -> dict | None:
     """
     Run the full ThreatForge simulation pipeline.
@@ -608,6 +651,19 @@ def run_simulation(
     print("=" * 60)
     print("THREATFORGE SIMULATION STARTING")
     print("=" * 60)
+
+    if target_ip:
+        target_info = lookup_device_by_ip(target_ip)
+        if target_info:
+            print(f"  Target Device:  {target_info['device_name']} ({target_ip})")
+            print(f"  Device Type:    {target_info['device_type']}")
+            print(f"  Device Owner:   {target_info['user_name']} (user_id: {target_info['user_id']})")
+            user_id = target_info['user_id']
+            device_id = target_info['device_id']
+        else:
+            print(f"  Target IP: {target_ip} (no registered device found)")
+    print(f"  Attack Type:    {attack_type}")
+    print(f"  Duration:       {duration}s")
 
     os.makedirs(CAPTURES_DIR, exist_ok=True)
 
@@ -648,12 +704,15 @@ def run_simulation(
     print(f"\n[4/8] Running attack type: {attack_type}")
     attack_types_used = []
 
+    ddos_target = target_ip or SMART_CAMERA_IP
+    portscan_targets = [target_ip] if target_ip else [SMART_CAMERA_IP, SMART_THERMOSTAT_IP, SMART_LOCK_IP]
+
     if attack_type in ("ddos", "both"):
-        attacker.run_ddos(duration=duration)
+        attacker.run_ddos(target_ip=ddos_target, duration=duration)
         attack_types_used.append("DDoS")
 
     if attack_type in ("portscan", "both"):
-        attacker.run_portscan()
+        attacker.run_portscan(targets=portscan_targets)
         attack_types_used.append("PortScan")
 
     if attack_type in ("ddos", "both"):
@@ -721,8 +780,8 @@ def run_simulation(
     # Step 9 — Persist results
     # ------------------------------------------------------------------ #
     save_simulation_result(results, pcap_path, attack_types_used, alerts_created)
-    run_id = save_simulation_to_db(results, attack_types_used, alerts_created, pcap_path, duration)
-    save_network_logs_to_db(results, run_id or "")
+    run_id = save_simulation_to_db(results, attack_types_used, alerts_created, pcap_path, duration, user_id)
+    save_network_logs_to_db(results, run_id or "", str(user_id))
 
     # ------------------------------------------------------------------ #
     # Summary
@@ -780,7 +839,25 @@ if __name__ == "__main__":
         default=ATTACK_DURATION_SECONDS,
         help=f"DDoS duration in seconds (default: {ATTACK_DURATION_SECONDS})",
     )
+    parser.add_argument(
+        "--target-ip",
+        type=str,
+        default=None,
+        help="IP address of target device (auto-looks up owner from DB)",
+    )
     args = parser.parse_args()
+
+    if args.target_ip:
+        print(f"\nLooking up device at {args.target_ip}...")
+        target_device = lookup_device_by_ip(args.target_ip)
+        if target_device:
+            print(f"  Device found: {target_device['device_name']} ({target_device['device_type']})")
+            print(f"  Owner: {target_device['user_name']} ({target_device['user_email']})")
+            args.user_id = target_device['user_id']
+            args.device_id = target_device['device_id']
+        else:
+            print(f"  WARNING: No registered device found at {args.target_ip}")
+            print(f"  Continuing with --user-id {args.user_id} as fallback...")
 
     run_simulation(
         attack_type=args.attack,
@@ -788,4 +865,5 @@ if __name__ == "__main__":
         device_id=args.device_id,
         api_url=args.api_url,
         duration=args.duration,
+        target_ip=args.target_ip,
     )

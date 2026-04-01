@@ -11,10 +11,13 @@ router = APIRouter()
 def get_network_logs(
     severity: Optional[str] = None,
     is_anomaly: Optional[bool] = None,
+    user_id: Optional[str] = None,
     limit: int = 50,
     db: Session = Depends(get_db)
 ):
     query = db.query(NetworkLog).order_by(NetworkLog.timestamp.desc())
+    if user_id:
+        query = query.filter(NetworkLog.user_id == user_id)
     if severity:
         query = query.filter(NetworkLog.severity == severity)
     if is_anomaly is not None:
@@ -40,13 +43,16 @@ def get_network_logs(
     ]
 
 @router.get("/logs/network/stats")
-def get_network_log_stats(db: Session = Depends(get_db)):
-    total = db.query(NetworkLog).count()
-    anomalies = db.query(NetworkLog).filter(NetworkLog.is_anomaly == True).count()
-    critical = db.query(NetworkLog).filter(NetworkLog.severity == "critical").count()
-    high = db.query(NetworkLog).filter(NetworkLog.severity == "high").count()
-    medium = db.query(NetworkLog).filter(NetworkLog.severity == "medium").count()
-    low = db.query(NetworkLog).filter(NetworkLog.severity == "low").count()
+def get_network_log_stats(user_id: Optional[str] = None, db: Session = Depends(get_db)):
+    base = db.query(NetworkLog)
+    if user_id:
+        base = base.filter(NetworkLog.user_id == user_id)
+    total = base.count()
+    anomalies = base.filter(NetworkLog.is_anomaly == True).count()
+    critical = base.filter(NetworkLog.severity == "critical").count()
+    high = base.filter(NetworkLog.severity == "high").count()
+    medium = base.filter(NetworkLog.severity == "medium").count()
+    low = base.filter(NetworkLog.severity == "low").count()
     return {
         "total_flows": total,
         "total_anomalies": anomalies,
@@ -57,15 +63,18 @@ def get_network_log_stats(db: Session = Depends(get_db)):
     }
 
 @router.get("/logs/network/by-device")
-def get_network_activity_by_device(db: Session = Depends(get_db)):
+def get_network_activity_by_device(user_id: Optional[str] = None, db: Session = Depends(get_db)):
     from sqlalchemy import func
-    results = db.query(
+    query = db.query(
         NetworkLog.dst_ip,
         func.count(NetworkLog.id).label("total_flows"),
         func.sum(func.cast(NetworkLog.is_anomaly, Integer)).label("anomalies"),
         func.max(NetworkLog.timestamp).label("last_seen"),
         func.avg(NetworkLog.rmse_score).label("avg_rmse"),
-    ).group_by(NetworkLog.dst_ip).all()
+    )
+    if user_id:
+        query = query.filter(NetworkLog.user_id == user_id)
+    results = query.group_by(NetworkLog.dst_ip).all()
 
     return [
         {

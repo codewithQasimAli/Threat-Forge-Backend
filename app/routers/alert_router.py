@@ -296,7 +296,7 @@ def get_alerts_summary(user_id: int, db: Session = Depends(get_db)):
     unacknowledged = db.query(Alert).filter(Alert.user_id == user_id, Alert.acknowledged == False).count()
 
     def _count_sev(sev: str) -> int:
-        return db.query(Alert).filter(Alert.user_id == user_id, Alert.severity == sev).count()
+        return db.query(Alert).filter(Alert.user_id == user_id, Alert.severity == sev, Alert.acknowledged == False).count()
 
     return {
         "total_alerts": total,

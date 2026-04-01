@@ -7,6 +7,7 @@ class SimulationRun(Base):
     __tablename__ = "simulation_runs"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(Integer, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     attack_types = Column(JSON, default=list)
     total_flows = Column(Integer, default=0)
