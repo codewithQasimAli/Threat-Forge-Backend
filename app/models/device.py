@@ -23,9 +23,5 @@ class Device(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
 
-    def __init__(self, *args, **kwargs):
-        from app.models.user import User  
-        self.user = relationship("User", back_populates="devices")
-        super().__init__(*args, **kwargs)
-
+    user = relationship("User", back_populates="devices")
     alerts = relationship("Alert", back_populates="device")

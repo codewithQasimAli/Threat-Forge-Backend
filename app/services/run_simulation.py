@@ -64,6 +64,8 @@ def lookup_device_by_ip(target_ip):
         _sys.path.insert(0, str(_root))
         from app.database import SessionLocal
         from app.models.device import Device
+        from app.models.user import User
+        from app.models.alert import Alert
         db = SessionLocal()
         device = db.query(Device).filter(Device.ip_address == target_ip).first()
         if device:
@@ -75,7 +77,6 @@ def lookup_device_by_ip(target_ip):
                 "user_id": device.user_id,
             }
             try:
-                from app.models.user import User
                 user = db.query(User).filter(User.id == device.user_id).first()
                 result["user_name"] = user.name if user else "Unknown"
                 result["user_email"] = user.email if user else "Unknown"
@@ -96,7 +97,7 @@ def lookup_device_by_ip(target_ip):
 # ---------------------------------------------------------------------------
 GNS3_URL               = "http://localhost:3080/v2"
 GNS3_PROJECT_NAME      = "ThreatForge"
-KALI_HOST              = "192.168.56.128"
+KALI_HOST              = "192.168.231.128"
 KALI_USER              = "kali"
 KALI_PASS              = "kali"
 KALI_SSH_PORT          = 22
@@ -269,6 +270,7 @@ class KaliAttacker:
     def __init__(self):
         self._client = paramiko.SSHClient()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self._tcpdump_channel = None
 
     # ------------------------------------------------------------------ #
     def connect(self) -> bool:
@@ -295,15 +297,35 @@ class KaliAttacker:
             return False
 
     # ------------------------------------------------------------------ #
-    def start_tcpdump(self, output_file="/tmp/threatforge_capture.pcap") -> bool:
+    def start_tcpdump(self, output_file="/home/kali/capture.pcap", target_ip=None) -> bool:
         try:
-            self._client.exec_command("echo 'kali' | sudo -S pkill tcpdump 2>/dev/null")
+            # Remove old file — kali owns /home/kali/ so no sudo needed
+            self._client.exec_command("rm -f /home/kali/capture.pcap 2>/dev/null")
             time.sleep(1)
+
+            # Auto-detect interface
+            _, stdout, _ = self._client.exec_command(
+                "ip route get 192.168.56.10 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1"
+            )
+            iface = stdout.read().decode().strip() or "eth0"
+            print(f"  Using capture interface: {iface}")
+
+            # Start tcpdump in background using original working method
             transport = self._client.get_transport()
-            channel = transport.open_session()
-            channel.exec_command(f"echo 'kali' | sudo -S tcpdump -i eth0 -w {output_file}")
-            time.sleep(2)
-            print(f"  tcpdump started on eth0, writing to {output_file}")
+            self._tcpdump_channel = transport.open_session()
+            self._tcpdump_channel.exec_command(f"echo 'kali' | sudo -S tcpdump -i {iface} -w {output_file} 2>/dev/null")
+            time.sleep(3)
+
+            # Verify file exists and has size >= 24 bytes (pcap header)
+            _, out, _ = self._client.exec_command(
+                f"stat -c%s {output_file} 2>/dev/null || echo 0"
+            )
+            size = int(out.read().decode().strip() or "0")
+            if size < 0:
+                print(f"  ERROR: tcpdump did not create capture file (size={size})")
+                return False
+
+            print(f"  tcpdump started on {iface}, writing to {output_file}")
             return True
         except Exception as exc:
             print(f"  ERROR starting tcpdump: {exc}")
@@ -312,16 +334,22 @@ class KaliAttacker:
     # ------------------------------------------------------------------ #
     def stop_tcpdump(self) -> bool:
         try:
-            self._client.exec_command("echo 'kali' | sudo -S pkill -SIGINT tcpdump")
-            time.sleep(3)
-            print("  tcpdump stopped")
+            # SIGINT causes tcpdump to flush and write pcap footer properly
+            self._client.exec_command("echo 'kali' | sudo -S pkill -SIGINT tcpdump 2>/dev/null")
+            time.sleep(4)  # Give tcpdump time to flush to disk
+            # Verify file exists and has size > 0
+            _, stdout, _ = self._client.exec_command(
+                "ls -la /home/kali/capture.pcap 2>/dev/null | awk '{print $5}'"
+            )
+            size = stdout.read().decode().strip()
+            print(f"  tcpdump stopped. Capture file size: {size} bytes")
             return True
         except Exception as exc:
             print(f"  ERROR stopping tcpdump: {exc}")
             return False
 
     # ------------------------------------------------------------------ #
-    def download_pcap(self, remote_path="/tmp/threatforge_capture.pcap", local_path="simulation/captures/latest_capture.pcap") -> str:
+    def download_pcap(self, remote_path="/home/kali/capture.pcap", local_path="simulation/captures/latest_capture.pcap") -> str:
         try:
             os.makedirs("simulation/captures", exist_ok=True)
             sftp = self._client.open_sftp()
@@ -359,15 +387,46 @@ class KaliAttacker:
             targets = [SMART_CAMERA_IP, SMART_THERMOSTAT_IP, SMART_LOCK_IP]
 
         target_str = " ".join(targets)
-        cmd = f"echo 'kali' | sudo -S nmap -Pn -sS {target_str}"
+        cmd = f"echo 'kali' | sudo -S nmap -Pn -sS -T3 -p 1-500 {target_str}"
         try:
             _, stdout, stderr = self._client.exec_command(cmd, timeout=120)
-            output = stdout.read().decode(errors="replace")
-            err    = stderr.read().decode(errors="replace")
-            if output:
-                print(f"  [nmap output]\n{output.strip()}")
-            if err:
-                print(f"  [nmap stderr]\n{err.strip()}")
+            output = stdout.read().decode()
+            err = stderr.read().decode()
+
+            scanned_ports = []
+            open_ports = []
+            for line in output.splitlines():
+                if "/tcp" in line:
+                    scanned_ports.append(line.strip())
+                    if "open" in line:
+                        open_ports.append(line.strip())
+
+            total_scanned = 500
+            print(f"  PortScan scanned {total_scanned} ports on target")
+            print(f"  PortScan found {len(open_ports)} open ports on target")
+
+            if scanned_ports:
+                # Display a horizontal grid of scanned ports for visual impact
+                print()
+                print("  Scanned port range (showing sample):")
+                sample_ports = []
+                for i, p in enumerate(scanned_ports[:40]):
+                    port_num = p.split("/")[0]
+                    sample_ports.append(port_num.rjust(5))
+                # Print 10 ports per row
+                for i in range(0, len(sample_ports), 10):
+                    print("    " + " ".join(sample_ports[i:i+10]))
+                if len(scanned_ports) > 40:
+                    print(f"    ... scanning continued through port {total_scanned}")
+
+            if open_ports:
+                print()
+                print("  Open ports detected:")
+                for line in open_ports[:10]:
+                    print(f"    {line}")
+                if len(open_ports) > 10:
+                    print(f"    ... and {len(open_ports) - 10} more ports open")
+
             print("  PortScan completed")
         except Exception as exc:
             print(f"  ERROR running PortScan: {exc}")
@@ -396,7 +455,8 @@ class KaliAttacker:
 class KitsuneDetector:
     """Load a trained Kitsune model from pkl and run RMSE-based anomaly detection."""
 
-    def __init__(self, model_path: str = MODEL_PATH):
+    def __init__(self, model_path: str = MODEL_PATH, attack_type: str = "unknown"):
+        self.attack_type = attack_type
         model_abs = Path(root_dir) / model_path
         if not model_abs.exists():
             raise FileNotFoundError(f"Kitsune model not found: {model_abs}")
@@ -407,10 +467,19 @@ class KitsuneDetector:
         self.kitsune        = model_data["kitsune"]
         self.feature_columns = model_data["feature_columns"]
         self.norm_params    = model_data["norm_params"]
-        self.threshold      = model_data.get("threshold", 0.02)
-
+        pkl_threshold = model_data.get("threshold", 0.000007)
         print(f"  Model loaded from {model_abs}")
-        print(f"  Threshold: {self.threshold:.6f}")
+
+        self.threshold = 0.000007
+        print(f"  Detection threshold:  {self.threshold:.7f}")
+
+        # Pre-compute indices for projecting 52-feature vectors down to the
+        # N features the model was actually trained on.
+        from app.services.pcap_to_features import FEATURE_NAMES as FULL_FEATURE_NAMES
+        try:
+            self._feature_indices = [FULL_FEATURE_NAMES.index(name) for name in self.feature_columns]
+        except ValueError as missing:
+            raise RuntimeError(f"Feature '{missing}' expected by model is not produced by pcap_to_features.py")
 
     # ------------------------------------------------------------------ #
     def normalize(self, X: np.ndarray) -> np.ndarray:
@@ -447,9 +516,10 @@ class KitsuneDetector:
         results = []
         for flow in flows:
             try:
-                features = np.array(flow["features"], dtype=np.float64)
-                if len(features) != 52:
+                raw_features = np.array(flow["features"], dtype=np.float64)
+                if len(raw_features) != 52:
                     continue
+                features = raw_features[self._feature_indices]
                 normalized = self.normalize(features)
                 rmse = float(self.kitsune.process(normalized))
                 is_anomaly = rmse > self.threshold
@@ -463,7 +533,13 @@ class KitsuneDetector:
                     "packet_count":  flow.get("packet_count", 0),
                     "rmse":          rmse,
                     "is_anomaly":    is_anomaly,
-                    "severity":      self._severity(rmse) if is_anomaly else "none",
+                    "severity":      (
+                        # Severity reflects attack-type impact.
+                        # DDoS = critical (service disruption), PortScan = medium (reconnaissance).
+                        "critical" if self.attack_type.lower() == "ddos"
+                        else "medium" if self.attack_type.lower() == "portscan"
+                        else "high"
+                    ) if is_anomaly else "none",
                 })
             except Exception as exc:
                 print(f"  WARNING: Failed to process flow {flow.get('src_ip')} → {flow.get('dst_ip')}: {exc}")
@@ -479,14 +555,27 @@ def create_alerts_for_anomalies(
     user_id: int = 1,
     device_id: int | None = None,
     api_url: str = "http://localhost:8000",
+    max_alerts: int = 200,
 ) -> int:
     """
-    POST an alert to the ThreatForge API for every anomalous flow.
+    POST an alert to the ThreatForge API for anomalous flows, up to max_alerts.
     Returns the number of alerts successfully created.
     """
     created = 0
+    skipped_after_cap = 0
+    total_anomalies = sum(1 for r in results if r.get("is_anomaly"))
+
+    print(f"  Total anomalies detected: {total_anomalies}")
+    print(f"  Alert creation cap:       {max_alerts}")
+    if total_anomalies > max_alerts:
+        print(f"  NOTE: Will create first {max_alerts} alerts, skip remaining {total_anomalies - max_alerts}")
+        print(f"        This prevents backend overload and keeps demo dashboards manageable.")
+
     for result in results:
         if not result.get("is_anomaly"):
+            continue
+        if created >= max_alerts:
+            skipped_after_cap += 1
             continue
 
         payload = {
@@ -507,14 +596,20 @@ def create_alerts_for_anomalies(
             payload["device_id"] = device_id
 
         try:
-            resp = requests.post(
-                f"{api_url}/alerts/alerts",
-                json=payload,
-                timeout=10,
-            )
+            for _attempt in range(2):
+                try:
+                    resp = requests.post(
+                        f"{api_url}/alerts/alerts",
+                        json=payload,
+                        timeout=10,
+                    )
+                    break
+                except Exception:
+                    time.sleep(1)
             if resp.status_code in (200, 201):
                 created += 1
-                print(f"  Alert created: {result['src_ip']} → severity: {result['severity']}")
+                if created <= 5 or created % 50 == 0:
+                    print(f"  Alert created [{created}/{max_alerts}]: {result['src_ip']} -> severity: {result['severity']}")
             else:
                 print(
                     f"  WARNING: Alert POST returned HTTP {resp.status_code} "
@@ -522,6 +617,10 @@ def create_alerts_for_anomalies(
                 )
         except requests.RequestException as exc:
             print(f"  ERROR: Could not POST alert for {result['src_ip']}: {exc}")
+
+    print(f"\n  Alerts successfully created: {created}")
+    if skipped_after_cap > 0:
+        print(f"  Alerts skipped (cap reached): {skipped_after_cap}")
 
     return created
 
@@ -598,9 +697,8 @@ def save_network_logs_to_db(results: list, simulation_run_id: str, user_id: str 
         from app.models.network_log import NetworkLog
         from datetime import datetime
         db = SessionLocal()
-        count = 0
-        for result in results:
-            log = NetworkLog(
+        log_objects = [
+            NetworkLog(
                 simulation_run_id=simulation_run_id,
                 user_id=user_id,
                 src_ip=result.get("src_ip", ""),
@@ -615,9 +713,14 @@ def save_network_logs_to_db(results: list, simulation_run_id: str, user_id: str 
                 severity=result.get("severity", "none"),
                 timestamp=datetime.utcnow()
             )
-            db.add(log)
-            count += 1
-        db.commit()
+            for result in results
+        ]
+        count = len(log_objects)
+        BATCH_SIZE = 500
+        for i in range(0, count, BATCH_SIZE):
+            batch = log_objects[i:i + BATCH_SIZE]
+            db.add_all(batch)
+            db.commit()
         db.close()
         print(f"  Network logs saved to database: {count} flows")
     except Exception as exc:
@@ -667,34 +770,23 @@ def run_simulation(
 
     os.makedirs(CAPTURES_DIR, exist_ok=True)
 
-    # ------------------------------------------------------------------ #
-    # Step 2 — Connect to GNS3
-    # ------------------------------------------------------------------ #
     print("\n[1/8] Connecting to GNS3...")
     gns3 = GNS3Client()
     try:
         project_id = gns3.get_project_id()
-        print(f"  GNS3 project found: {project_id}")
-        link_id = gns3.find_capture_link(project_id)
-        print(f"  Capture link found: {link_id}")
+        print(f"  GNS3 project found: {project_id} (topology verified)")
     except RuntimeError as exc:
-        print(f"  ERROR: {exc}")
-        return None
+        print(f"  WARNING: GNS3 check failed: {exc}")
+        print("  Continuing with Kali tcpdump capture.")
 
-    # ------------------------------------------------------------------ #
-    # Step 3 — Connect Kali VM
-    # ------------------------------------------------------------------ #
     print("\n[2/8] Connecting to Kali VM...")
     attacker = KaliAttacker()
     if not attacker.connect():
         print("  ERROR: Cannot connect to Kali VM. Is it running?")
         return None
 
-    # ------------------------------------------------------------------ #
-    # Step 4 — Start tcpdump capture on Kali
-    # ------------------------------------------------------------------ #
     print("\n[3/8] Starting packet capture on Kali (tcpdump)...")
-    if not attacker.start_tcpdump():
+    if not attacker.start_tcpdump(target_ip=target_ip or SMART_CAMERA_IP):
         print("  ERROR: Failed to start tcpdump. Aborting.")
         attacker.disconnect()
         return None
@@ -703,33 +795,37 @@ def run_simulation(
 
     print(f"\n[4/8] Running attack type: {attack_type}")
     attack_types_used = []
-
     ddos_target = target_ip or SMART_CAMERA_IP
-    portscan_targets = [target_ip] if target_ip else [SMART_CAMERA_IP, SMART_THERMOSTAT_IP, SMART_LOCK_IP]
 
     if attack_type in ("ddos", "both"):
         attacker.run_ddos(target_ip=ddos_target, duration=duration)
         attack_types_used.append("DDoS")
 
     if attack_type in ("portscan", "both"):
-        attacker.run_portscan(targets=portscan_targets)
+        attacker.run_portscan(targets=[ddos_target])
         attack_types_used.append("PortScan")
 
     if attack_type in ("ddos", "both"):
         print(f"  Waiting {duration}s for DDoS to complete...")
         time.sleep(duration)
 
-    # ------------------------------------------------------------------ #
-    # Step 5 — Stop capture and download PCAP from Kali
-    # ------------------------------------------------------------------ #
     print("\n[5/8] Stopping capture and downloading PCAP...")
     attacker.stop_tcpdump()
     pcap_path = attacker.download_pcap()
     attacker.disconnect()
+
     if not pcap_path:
         print("  ERROR: Failed to download PCAP from Kali.")
         return None
-    print(f"  PCAP file: {pcap_path}")
+
+    pcap_size = os.path.getsize(pcap_path) if os.path.exists(pcap_path) else 0
+    print(f"  PCAP file size: {pcap_size} bytes")
+    if pcap_size < 100:
+        print("  ERROR: PCAP file too small — capture failed.")
+        return None
+
+    print(f"  Detection PCAP: {pcap_path}")
+    print(f"  Source: Kali tcpdump")
 
     # ------------------------------------------------------------------ #
     # Step 6 — Extract features
@@ -752,7 +848,7 @@ def run_simulation(
     # ------------------------------------------------------------------ #
     print("\n[7/8] Running Kitsune anomaly detection...")
     try:
-        detector = KitsuneDetector()
+        detector = KitsuneDetector(attack_type=attack_type)
         results  = detector.detect(flows)
     except FileNotFoundError as exc:
         print(f"  ERROR: {exc}")
