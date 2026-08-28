@@ -45,6 +45,10 @@ class UserUpdate(BaseModel):
     password: str | None = None
     phone: str | None = None
 
+class FCMTokenUpdate(BaseModel):
+    user_id: int
+    fcm_token: str
+
 class ForgotPasswordRequest(BaseModel):
     email: str
 
@@ -183,3 +187,14 @@ def forgot_password_reset(payload: ForgotPasswordReset, db: Session = Depends(ge
     # Clear state after successful reset
     clear_reset_state(payload.email)
     return {"message": "Password has been reset successfully."}
+
+
+@router.post("/fcm-token")
+def update_fcm_token(payload: FCMTokenUpdate, db: Session = Depends(get_db)):
+    from app.models.user import User
+    user = db.query(User).filter(User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.fcm_token = payload.fcm_token
+    db.commit()
+    return {"message": "FCM token updated"}
