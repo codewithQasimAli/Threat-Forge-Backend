@@ -7,13 +7,13 @@ File: app/routers/alert_router.py
 - Also sends update messages on acknowledge / update / delete (optional but implemented)
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from app.services.alert_service import AlertService
 from app.database import get_db
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.models.alert import Alert
 
 from app.websockets.alert_websocket import alert_ws_manager
@@ -265,6 +265,9 @@ def get_alerts_by_user_route(
     limit: int = 100,
     acknowledged: Optional[bool] = None,
     severity: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    device_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(Alert).filter(Alert.user_id == user_id)
@@ -274,6 +277,23 @@ def get_alerts_by_user_route(
 
     if severity:
         query = query.filter(Alert.severity == severity)
+
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            query = query.filter(Alert.created_at >= start_dt)
+        except ValueError:
+            pass
+
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(Alert.created_at < end_dt)
+        except ValueError:
+            pass
+
+    if device_id is not None:
+        query = query.filter(Alert.device_id == device_id)
 
     return query.order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
 
@@ -319,7 +339,7 @@ def get_alert_by_id(id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/alerts", response_model=AlertResponse, status_code=201)
-async def create_alert_route(alert: AlertCreate, db: Session = Depends(get_db)):
+async def create_alert_route(alert: AlertCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     from app.services.alert_service import create_alert
 
     db_alert = create_alert(
@@ -338,6 +358,37 @@ async def create_alert_route(alert: AlertCreate, db: Session = Depends(get_db)):
     )
 
     await alert_ws_manager.send_alert_to_user(db_alert.user_id, _alert_to_ws_dict(db_alert))
+
+    try:
+        from app.models.user import User
+        from app.models.device import Device
+        from app.services import fcm_service
+
+        user = db.query(User).filter(User.id == db_alert.user_id).first()
+        if user and getattr(user, "fcm_token", None):
+            device_name = "your network"
+            if db_alert.device_id:
+                device = db.query(Device).filter(Device.id == db_alert.device_id).first()
+                if device:
+                    device_name = device.device_name
+
+            background_tasks.add_task(
+                fcm_service.send_alert,
+                fcm_token=user.fcm_token,
+                title=f"ThreatForge - {db_alert.severity.upper()} Alert",
+                body=f"Attack detected from {db_alert.source_ip} on {device_name}",
+                data={
+                    "alert_id": str(db_alert.id),
+                    "severity": db_alert.severity,
+                    "source_ip": db_alert.source_ip or "",
+                    "dest_ip": db_alert.dest_ip or "",
+                    "device_id": str(db_alert.device_id) if db_alert.device_id else "",
+                    "created_at": db_alert.created_at.isoformat() if db_alert.created_at else "",
+                },
+            )
+    except Exception as exc:
+        print(f"FCM push skipped: {exc}")
+
     print("Senidng data to postman")
     return db_alert
 
