@@ -216,8 +216,8 @@ def main():
         print("  No attack RMSE data. Cannot assess discrimination.")
 
     section("STEP 6 — RECOMMENDED NEXT ACTION")
-    print("Share this full output with Claude.ai — the mean/median RMSE values")
-    print("and the Scenario label will determine the path forward.")
+    print("Review the mean/median RMSE values and the Scenario label above")
+    print("to determine the appropriate calibration path forward.")
 
 
 def test_model_determinism(kitsune, norm, features):
