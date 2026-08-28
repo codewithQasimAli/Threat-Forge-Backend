@@ -297,23 +297,28 @@ class KaliAttacker:
             return False
 
     # ------------------------------------------------------------------ #
-    def start_tcpdump(self, output_file="/home/kali/capture.pcap", target_ip=None) -> bool:
+    def start_tcpdump(self, output_file="/home/kali/capture.pcap", target_ip=None, interface=None) -> bool:
         try:
             # Remove old file — kali owns /home/kali/ so no sudo needed
             self._client.exec_command("rm -f /home/kali/capture.pcap 2>/dev/null")
             time.sleep(1)
 
             # Auto-detect interface
-            _, stdout, _ = self._client.exec_command(
-                "ip route get 192.168.56.10 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1"
-            )
-            iface = stdout.read().decode().strip() or "eth0"
-            print(f"  Using capture interface: {iface}")
+            if interface:
+                iface = interface
+                print(f"  Using capture interface: {iface} (explicitly set)")
+            else:
+                _, stdout, _ = self._client.exec_command(
+                    "ip route get 192.168.56.10 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1"
+                )
+                iface = stdout.read().decode().strip() or "eth0"
+                print(f"  Using capture interface: {iface} (auto-detected)")
 
             # Start tcpdump in background using original working method
             transport = self._client.get_transport()
             self._tcpdump_channel = transport.open_session()
-            self._tcpdump_channel.exec_command(f"echo 'kali' | sudo -S tcpdump -i {iface} -w {output_file} 2>/dev/null")
+            host_filter = f"host {target_ip}" if target_ip else ""
+            self._tcpdump_channel.exec_command(f"echo 'kali' | sudo -S tcpdump -i {iface} {host_filter} -w {output_file} 2>/dev/null")
             time.sleep(3)
 
             # Verify file exists and has size >= 24 bytes (pcap header)
@@ -387,7 +392,7 @@ class KaliAttacker:
             targets = [SMART_CAMERA_IP, SMART_THERMOSTAT_IP, SMART_LOCK_IP]
 
         target_str = " ".join(targets)
-        cmd = f"echo 'kali' | sudo -S nmap -Pn -sS -T3 -p 1-500 {target_str}"
+        cmd = f"echo 'kali' | sudo -S nmap -Pn -sS -T3 -p 1-9000 {target_str}"
         try:
             _, stdout, stderr = self._client.exec_command(cmd, timeout=120)
             output = stdout.read().decode()
@@ -608,7 +613,7 @@ def create_alerts_for_anomalies(
                     time.sleep(1)
             if resp.status_code in (200, 201):
                 created += 1
-                if created <= 5 or created % 50 == 0:
+                if True:
                     print(f"  Alert created [{created}/{max_alerts}]: {result['src_ip']} -> severity: {result['severity']}")
             else:
                 print(
@@ -737,6 +742,7 @@ def run_simulation(
     api_url: str = "http://localhost:8000",
     duration: int = ATTACK_DURATION_SECONDS,
     target_ip: str = None,
+    interface: str = None,
 ) -> dict | None:
     """
     Run the full ThreatForge simulation pipeline.
@@ -786,7 +792,7 @@ def run_simulation(
         return None
 
     print("\n[3/8] Starting packet capture on Kali (tcpdump)...")
-    if not attacker.start_tcpdump(target_ip=target_ip or SMART_CAMERA_IP):
+    if not attacker.start_tcpdump(target_ip=target_ip or SMART_CAMERA_IP, interface=interface):
         print("  ERROR: Failed to start tcpdump. Aborting.")
         attacker.disconnect()
         return None
@@ -867,7 +873,7 @@ def run_simulation(
     alerts_created = 0
     if anomalies:
         print(f"\n[8/8] Creating alerts for {len(anomalies)} anomalies...")
-        alerts_created = create_alerts_for_anomalies(results, user_id, device_id, api_url)
+        alerts_created = create_alerts_for_anomalies(results, user_id, device_id, api_url, max_alerts=50)
         print(f"  Alerts created: {alerts_created}")
     else:
         print("\n[8/8] No anomalies detected — no alerts created.")
@@ -941,6 +947,12 @@ if __name__ == "__main__":
         default=None,
         help="IP address of target device (auto-looks up owner from DB)",
     )
+    parser.add_argument(
+        "--interface",
+        type=str,
+        default=None,
+        help="Network interface for tcpdump capture (eth0=GNS3, eth1=camera hotspot)",
+    )
     args = parser.parse_args()
 
     if args.target_ip:
@@ -962,4 +974,5 @@ if __name__ == "__main__":
         api_url=args.api_url,
         duration=args.duration,
         target_ip=args.target_ip,
+        interface=args.interface,
     )
